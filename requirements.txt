@@ -2,7 +2,7 @@
 python-telegram-bot[job-queue,webhooks]==21.10
 
 # ══ Image Processing (لتصغير اللوغو فقط) ══
-Pillow>=10.3.0
+Pillow>=10.4.0
 
 # ══ Arabic Text ══
 arabic-reshaper>=3.0.0
