@@ -1,44 +1,11 @@
-# ══ Telegram Bot ══
-python-telegram-bot[job-queue,webhooks]==21.10
-
-# ══ Image Processing (لتصغير اللوغو فقط) ══
-Pillow>=10.4.0
-
-# ══ Arabic Text ══
-arabic-reshaper>=3.0.0
-python-bidi>=0.4.2
-
-# ══ QR Code ══
-qrcode[pil]>=7.4.2
-
-# ══ Translation (مطلوبة للترجمة AR→EN) ══
-deep-translator>=1.11.4
-
-# ══ Hijri Calendar ══
-hijri-converter>=2.3.1
-
-# ══ Job Queue ══
-APScheduler>=3.10.4
-
-# ✅ تشفير حقيقي (Fernet/AES)
-cryptography>=42.0.0
-
-# ══ SQLite مدمج في Python — لا يحتاج تثبيت ══
-# (sqlite3 جزء من Python standard library)
-
-# HTTP
-requests>=2.31.0
-aiohttp>=3.9.0
-
-# ══ AI Extraction ══
-cerebras-cloud-sdk>=1.0.0
-
-# ══ Excel Export ══
-openpyxl==3.1.2
-
-# ══ Database ══
-psycopg2-binary>=2.9.9
-
-# ══ PDF Generation (pdf_gen.py) ══
-reportlab>=4.2.0
-pypdf>=4.0.0
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pydantic==2.7.1
+reportlab==4.1.0
+pypdf==4.2.0
+pillow>=11.0.0
+arabic-reshaper==3.0.0
+python-bidi==0.4.2
+qrcode==7.4.2
