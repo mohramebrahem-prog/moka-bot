@@ -9,3 +9,4 @@ pillow>=11.0.0
 arabic-reshaper>=3.0.0
 python-bidi>=0.6.0
 qrcode>=7.4.2
+hijridate>=2.3.0

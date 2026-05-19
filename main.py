@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Query, Body
+from fastapi import FastAPI, HTTPException, Depends, Query, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -143,6 +143,18 @@ def init_db():
             value TEXT DEFAULT ''
         );
 
+        -- ══ كودات الشحن ══
+        CREATE TABLE IF NOT EXISTS charge_codes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            code       TEXT    UNIQUE NOT NULL,
+            amount     REAL    NOT NULL,
+            is_used    INTEGER DEFAULT 0,
+            used_by    INTEGER DEFAULT NULL REFERENCES users(id),
+            used_at    TEXT    DEFAULT NULL,
+            note       TEXT    DEFAULT '',
+            created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- ══ المرضى المحفوظون ══
         CREATE TABLE IF NOT EXISTS saved_patients (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,11 +268,17 @@ def _verify_token(token: str) -> Optional[dict]:
     return None
 
 def get_current_user(
-    creds: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    request: "Request",
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> dict:
-    if not creds:
+    # ١) Bearer header (الطريقة المعتادة)
+    token = creds.credentials if creds else None
+    # ٢) query param ?token=... (للتحميل المباشر مثل PDF)
+    if not token:
+        token = request.query_params.get("token")
+    if not token:
         raise HTTPException(401, "مطلوب تسجيل الدخول")
-    user = _verify_token(creds.credentials)
+    user = _verify_token(token)
     if not user:
         raise HTTPException(401, "رمز غير صالح أو منتهي")
     return user
@@ -834,6 +852,51 @@ def charge_wallet(data: WalletCharge, admin: dict = Depends(require_admin)):
         "user_id":     data.user_id,
     }
 
+@app.post("/wallet/charge-code", tags=["Wallet"])
+def charge_wallet_by_code(
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user),
+):
+    """شحن رصيد المستخدم بكود شحن"""
+    code = str(data.get("code", "")).strip().upper()
+    if not code:
+        raise HTTPException(400, "الكود مطلوب")
+
+    with db_ctx() as conn:
+        row = conn.execute(
+            "SELECT * FROM charge_codes WHERE code = ?", (code,)
+        ).fetchone()
+
+        if not row:
+            raise HTTPException(404, "الكود غير صحيح")
+        if row["is_used"]:
+            raise HTTPException(409, "هذا الكود مستخدم مسبقاً")
+
+        amount = row["amount"]
+        now    = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        conn.execute(
+            "UPDATE charge_codes SET is_used=1, used_by=?, used_at=? WHERE code=?",
+            (user["id"], now, code)
+        )
+        conn.execute(
+            "UPDATE users SET balance = balance + ? WHERE id=?",
+            (amount, user["id"])
+        )
+        conn.execute(
+            "INSERT INTO transactions(user_id, type, amount, note) VALUES(?,?,?,?)",
+            (user["id"], "charge", amount, f"شحن بكود: {code}")
+        )
+        new_balance = conn.execute(
+            "SELECT balance FROM users WHERE id=?", (user["id"],)
+        ).fetchone()["balance"]
+
+    return {
+        "message":     f"✅ تم شحن {amount:.2f} ريال بنجاح",
+        "amount":      amount,
+        "new_balance": new_balance,
+    }
+
 @app.post("/wallet/deduct", tags=["Wallet"])
 def deduct_wallet(data: WalletCharge, admin: dict = Depends(require_admin)):
     """خصم رصيد من مستخدم (مسؤول فقط)"""
@@ -1061,6 +1124,89 @@ def update_setting(key: str, data: SettingUpdate, admin: dict = Depends(require_
             (key, data.value)
         )
     return {"message": f"تم تحديث الإعداد '{key}'", "key": key, "value": data.value}
+
+# ══════════════════════════════════════════════════════
+#  🎟️ إدارة كودات الشحن (أدمن)
+# ══════════════════════════════════════════════════════
+
+class ChargeCodeCreate(BaseModel):
+    amount:  float
+    count:   int   = 1    # عدد الكودات المطلوب توليدها
+    note:    str   = ""
+
+@app.get("/admin/charge-codes", tags=["Admin"])
+def admin_list_codes(
+    is_used: Optional[int] = Query(None, description="0=غير مستخدمة, 1=مستخدمة"),
+    limit:   int           = Query(50, le=200),
+    offset:  int           = Query(0),
+    admin:   dict          = Depends(require_admin),
+):
+    """قائمة كودات الشحن"""
+    sql    = """
+        SELECT c.*, u.name AS used_by_name
+        FROM charge_codes c
+        LEFT JOIN users u ON c.used_by = u.id
+        WHERE 1=1
+    """
+    params: list[Any] = []
+    if is_used is not None:
+        sql += " AND c.is_used = ?"
+        params.append(is_used)
+    sql += " ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+
+    with db_ctx() as conn:
+        rows  = conn.execute(sql, params).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM charge_codes").fetchone()[0]
+        unused = conn.execute("SELECT COUNT(*) FROM charge_codes WHERE is_used=0").fetchone()[0]
+
+    return {
+        "codes":  [dict(r) for r in rows],
+        "total":  total,
+        "unused": unused,
+    }
+
+@app.post("/admin/charge-codes", tags=["Admin"])
+def admin_create_codes(data: ChargeCodeCreate, admin: dict = Depends(require_admin)):
+    """توليد كودات شحن جديدة"""
+    if data.amount <= 0:
+        raise HTTPException(400, "المبلغ يجب أن يكون أكبر من صفر")
+    count = max(1, min(data.count, 100))  # حد أقصى 100 كود دفعة واحدة
+
+    import random, string
+    generated = []
+    with db_ctx() as conn:
+        for _ in range(count):
+            while True:
+                code = "GSL-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=4)) \
+                               + "-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+                exists = conn.execute("SELECT id FROM charge_codes WHERE code=?", (code,)).fetchone()
+                if not exists:
+                    break
+            conn.execute(
+                "INSERT INTO charge_codes(code, amount, note) VALUES(?,?,?)",
+                (code, data.amount, data.note)
+            )
+            generated.append(code)
+
+    return {
+        "message": f"تم إنشاء {count} كود شحن بقيمة {data.amount} ريال",
+        "codes":   generated,
+        "amount":  data.amount,
+    }
+
+@app.delete("/admin/charge-codes/{code}", tags=["Admin"])
+def admin_delete_code(code: str, admin: dict = Depends(require_admin)):
+    """حذف كود شحن"""
+    code = code.strip().upper()
+    with db_ctx() as conn:
+        row = conn.execute("SELECT * FROM charge_codes WHERE code=?", (code,)).fetchone()
+        if not row:
+            raise HTTPException(404, "الكود غير موجود")
+        if row["is_used"]:
+            raise HTTPException(409, "لا يمكن حذف كود مستخدم")
+        conn.execute("DELETE FROM charge_codes WHERE code=?", (code,))
+    return {"message": f"تم حذف الكود {code}"}
 
 # ══════════════════════════════════════════════════════
 #  🏠 الصفحة الرئيسية

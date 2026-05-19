@@ -2160,6 +2160,7 @@ body {
     <div class="admin-tab active" onclick="adminSwitchTab('stats')" id="atab-stats">📊 إحصائيات</div>
     <div class="admin-tab" onclick="adminSwitchTab('hospitals')" id="atab-hospitals">🏥 مستشفيات</div>
     <div class="admin-tab" onclick="adminSwitchTab('users')" id="atab-users">👥 مستخدمون</div>
+    <div class="admin-tab" onclick="adminSwitchTab('codes')" id="atab-codes">🎟️ كودات</div>
   </div>
 
   <!-- ═══ TAB: Stats ═══ -->
@@ -2358,6 +2359,45 @@ body {
     </div>
 
   </div><!-- /adminTabUsers -->
+
+  <!-- ═══ TAB: Codes ═══ -->
+  <div id="adminTabCodes" style="display:none">
+
+    <div class="admin-section">
+      <div class="admin-section-title">🎟️ إنشاء كودات شحن</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">المبلغ (ريال)</div>
+          <input class="form-input" type="number" id="codeAmount" placeholder="25" min="1" style="text-align:center;font-weight:700;font-size:16px">
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">عدد الكودات</div>
+          <input class="form-input" type="number" id="codeCount" placeholder="1" min="1" max="50" value="1" style="text-align:center;font-weight:700;font-size:16px">
+        </div>
+      </div>
+      <input class="form-input" type="text" id="codeNote" placeholder="ملاحظة (اختياري)" style="margin-bottom:10px">
+      <button class="btn btn-primary" onclick="adminCreateCodes()" style="width:100%">✨ إنشاء الكودات</button>
+    </div>
+
+    <div class="admin-section" id="newCodesResult" style="display:none">
+      <div class="admin-section-title">📋 الكودات المُنشأة</div>
+      <div id="newCodesList" style="font-family:monospace;font-size:14px;direction:ltr"></div>
+      <button class="btn btn-secondary" onclick="copyAllCodes()" style="width:100%;margin-top:10px">📋 نسخ الكل</button>
+    </div>
+
+    <div class="admin-section">
+      <div class="admin-section-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>📜 سجل الكودات</span>
+        <div style="display:flex;gap:6px">
+          <button class="rfchip active" id="chip-all-codes" onclick="filterCodes('all')">الكل</button>
+          <button class="rfchip" id="chip-unused" onclick="filterCodes('unused')">غير مستخدمة</button>
+          <button class="rfchip" id="chip-used" onclick="filterCodes('used')">مستخدمة</button>
+        </div>
+      </div>
+      <div id="adminCodeList" style="margin-top:10px"></div>
+    </div>
+
+  </div><!-- /adminTabCodes -->
 
 </div><!-- /page-admin -->
 
@@ -3090,7 +3130,26 @@ const API = {
     const r = await fetch(this.BASE + path, {
       method: 'POST', headers: this.headers(), body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).detail || r.status);
+    if (!r.ok) {
+      const errBody = await r.json().catch(()=>({}));
+      const err = new Error(errBody.detail || r.status);
+      err.detail = errBody.detail || String(r.status);
+      err.status = r.status;
+      throw err;
+    }
+    return r.json();
+  },
+
+  async delete(path) {
+    const r = await fetch(this.BASE + path, {
+      method: 'DELETE', headers: this.headers()
+    });
+    if (!r.ok) {
+      const errBody = await r.json().catch(()=>({}));
+      const err = new Error(errBody.detail || r.status);
+      err.detail = errBody.detail || String(r.status);
+      throw err;
+    }
     return r.json();
   },
 
@@ -3182,7 +3241,14 @@ async function apiInit() {
     state.balance     = d.user.balance;
     state.reportPrice = d.report_price || 10;
     updateBalance();
-    if (d.user.role === 'admin') document.getElementById('navAdmin')?.style.setProperty('display','flex');
+    // تحديد صلاحية الأدمن من الـ Backend
+    if (d.user.role === 'admin') {
+      ADMIN.isAdmin = true;
+      document.getElementById('navAdmin')?.style.setProperty('display','flex');
+    } else {
+      ADMIN.isAdmin = false;
+      document.getElementById('navAdmin')?.style.setProperty('display','none');
+    }
   } catch(e) {
     console.warn('API login failed, using MOCK:', e.message);
     return; // يكمل بـ MOCK
@@ -4156,16 +4222,21 @@ function renderTransactions() {
 function doCharge() {
   const code=document.getElementById('chargeCode').value.trim().toUpperCase();
   if(!code){showToast('❌ أدخل كود الشحن');return;}
-  const btn=document.getElementById('chargeBtn');btn.innerHTML='<div class="spinner"></div>';btn.disabled=true;
-  setTimeout(()=>{
-    btn.innerHTML='✅ شحن';btn.disabled=false;
-    if(code.startsWith('GSL')){
-      state.balance+=25;
-      state.transactions.unshift({type:'credit',label:`شحن بكود ${code}`,amount:+25,date:new Date().toISOString().split('T')[0]});
+  const btn=document.getElementById('chargeBtn');
+  btn.innerHTML='<div class="spinner"></div>';btn.disabled=true;
+  API.post('/wallet/charge-code', {code})
+    .then(res => {
+      state.balance = res.new_balance;
+      state.transactions.unshift({type:'credit',label:`شحن بكود ${code}`,amount:+res.amount,date:new Date().toISOString().split('T')[0]});
       updateBalance();renderTransactions();closeModal('chargeModal');
-      document.getElementById('chargeCode').value='';showToast('✅ تم شحن 25 ريال!');
-    }else showToast('❌ الكود غير صحيح');
-  },1000);
+      document.getElementById('chargeCode').value='';
+      showToast(`✅ تم شحن ${res.amount.toFixed(2)} ريال!`);
+    })
+    .catch(err => {
+      const msg = err?.detail || err?.message || 'الكود غير صحيح أو مستخدم';
+      showToast('❌ ' + msg);
+    })
+    .finally(() => { btn.innerHTML='✅ شحن'; btn.disabled=false; });
 }
 function openOfferConfirm(name,detail,price,orig,reports) {
   document.getElementById('offerModalTitle').textContent='🛒 تأكيد — '+name;
@@ -5278,8 +5349,8 @@ async function cmpConfirmReport() {
 //  ADMIN — Mock Data & State
 // ══════════════════════════════════════════════════════════════
 const ADMIN = {
-  isAdmin: true, // في الإنتاج يُحدَّد من Telegram initData
-  users: [
+  isAdmin: false, // يُحدَّد من الـ Backend بعد تسجيل الدخول
+  users: [],
     {id:'u1',name:'محمد الحربي',tid:'5562670260',balance:45,reports:5,joinDate:'2026-01-15',status:'active',color:'linear-gradient(135deg,#0B7A6E,#12A090)'},
     {id:'u2',name:'خالد العتيبي',tid:'4412345678',balance:20,reports:12,joinDate:'2026-02-03',status:'active',color:'linear-gradient(135deg,#7C3AED,#9F5FFF)'},
     {id:'u3',name:'فاطمة الزهراني',tid:'9987654321',balance:0,reports:7,joinDate:'2026-02-20',status:'active',color:'linear-gradient(135deg,#E91E8C,#F06292)'},
@@ -5300,10 +5371,10 @@ async function adminInit() {
     ]);
     // تحديث admin state من API
     if (stats) {
-      document.getElementById('adm-stat-users')  && (document.getElementById('adm-stat-users').textContent  = stats.total_users  || 0);
-      document.getElementById('adm-stat-reports') && (document.getElementById('adm-stat-reports').textContent = stats.total_reports || 0);
-      document.getElementById('adm-stat-revenue') && (document.getElementById('adm-stat-revenue').textContent = (stats.total_revenue||0).toFixed(0) + ' ر');
-      document.getElementById('adm-stat-hosps')  && (document.getElementById('adm-stat-hosps').textContent  = stats.active_hospitals || 0);
+      document.getElementById('adm-stat-users')  && (document.getElementById('adm-stat-users').textContent  = stats.users?.total || stats.total_users || 0);
+      document.getElementById('adm-stat-reports') && (document.getElementById('adm-stat-reports').textContent = stats.reports?.total || stats.total_reports || 0);
+      document.getElementById('adm-stat-revenue') && (document.getElementById('adm-stat-revenue').textContent = ((stats.financial?.total_revenue || stats.total_revenue||0)).toFixed(0) + ' ر');
+      document.getElementById('adm-stat-hosps')  && (document.getElementById('adm-stat-hosps').textContent  = stats.hospitals?.total || stats.active_hospitals || 0);
     }
     if (users?.users) window._adminUsers = users.users;
     if (hosps?.hospitals) window._adminHospitals = hosps.hospitals;
@@ -5313,15 +5384,18 @@ async function adminInit() {
   const navAdmin = document.getElementById('navAdmin');
   if (navAdmin && ADMIN.isAdmin) navAdmin.style.display = 'flex';
 
-  // تحديث KPI
-  const totalReports = state.reports.length + 19; // mock
-  const totalRevenue = (state.reports.length + 19) * 5;
-  document.getElementById('adminKpiUsers').textContent = ADMIN.users.length;
-  document.getElementById('adminKpiReports').textContent = totalReports;
-  document.getElementById('adminKpiRevenue').textContent = totalRevenue;
-  document.getElementById('adminKpiHosps').textContent = MOCK.hospitals.length;
-  document.getElementById('adminStatTotal').textContent = totalReports;
-  document.getElementById('adminStatRevenue').textContent = totalRevenue + ' ر';
+  // تحديث KPI من API
+  try {
+    const stats = await API.adminStats();
+    const s = stats || {};
+    const u = s.users || {}; const r = s.reports || {}; const f = s.financial || {};
+    document.getElementById('adminKpiUsers').textContent    = u.total ?? '--';
+    document.getElementById('adminKpiReports').textContent  = r.total ?? '--';
+    document.getElementById('adminKpiRevenue').textContent  = (f.total_revenue ?? 0).toFixed(0);
+    document.getElementById('adminKpiHosps').textContent    = (s.hospitals?.total) ?? '--';
+    document.getElementById('adminStatTotal') && (document.getElementById('adminStatTotal').textContent = r.total ?? '--');
+    document.getElementById('adminStatRevenue') && (document.getElementById('adminStatRevenue').textContent = (f.total_revenue??0).toFixed(0) + ' ر');
+  } catch(e) { console.warn('KPI load failed:', e.message); }
 
   // عرض tab الإحصائيات
   adminSwitchTab('stats');
@@ -5333,10 +5407,11 @@ async function adminInit() {
 //  ADMIN — Tabs
 // ══════════════════════════════════════════════════════════════
 function adminSwitchTab(tab) {
-  ['stats','hospitals','users'].forEach(t=>{
+  ['stats','hospitals','users','codes'].forEach(t=>{
     document.getElementById('adminTab'+t.charAt(0).toUpperCase()+t.slice(1)).style.display = t===tab?'block':'none';
     document.getElementById('atab-'+t).classList.toggle('active', t===tab);
   });
+  if (tab === 'codes') adminLoadCodes();
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -5459,28 +5534,48 @@ function adminDeleteHosp(hid, name) {
 function adminRenderUsers(q='') {
   const list = document.getElementById('adminUserList');
   if (!list) return;
-  let filtered = ADMIN.users;
-  if (_adminUserFilterMode === 'active')    filtered = filtered.filter(u=>u.status==='active');
-  if (_adminUserFilterMode === 'suspended') filtered = filtered.filter(u=>u.status==='suspended');
-  if (q) filtered = filtered.filter(u=>u.name.includes(q)||u.tid.includes(q));
+  // استخدام بيانات API إذا متاحة، وإلا الـ mock
+  let source = (window._adminUsers && window._adminUsers.length) ? window._adminUsers : ADMIN.users;
+  let filtered = source;
+  if (_adminUserFilterMode === 'active')    filtered = filtered.filter(u=>(u.status||u.role)==='active'||u.status==='active');
+  if (_adminUserFilterMode === 'suspended') filtered = filtered.filter(u=>u.status==='suspended'||u.status==='banned');
+  const qLow = (q||'').trim().toLowerCase();
+  if (qLow) filtered = filtered.filter(u=>{
+    const name = (u.name||u.username||'').toLowerCase();
+    const tid  = String(u.telegram_id || u.tid || '');
+    return name.includes(qLow) || tid.includes(qLow);
+  });
   if (!filtered.length) {
     list.innerHTML = `<div class="empty"><span class="empty-icon">👥</span><div class="empty-title">لا توجد نتائج</div></div>`;
     return;
   }
-  list.innerHTML = filtered.map(u => `
-    <div class="admin-user-item" onclick="adminOpenUser('${u.id}')">
-      <div class="admin-user-avatar" style="background:${u.color}">${u.name.slice(0,2)}</div>
+  const colors = ['linear-gradient(135deg,#0B7A6E,#12A090)','linear-gradient(135deg,#7C3AED,#9F5FFF)',
+    'linear-gradient(135deg,#E91E8C,#F06292)','linear-gradient(135deg,#FF6B35,#FF8C5A)',
+    'linear-gradient(135deg,#1BAB72,#2DD4A0)'];
+  list.innerHTML = filtered.map((u,i) => {
+    const uid    = u.id || u.id;
+    const name   = u.name || u.username || 'مستخدم';
+    const tid    = String(u.telegram_id || u.tid || '');
+    const bal    = (u.balance ?? 0).toFixed(2);
+    const reps   = u.reports_count ?? u.reports ?? 0;
+    const status = u.status || 'active';
+    const joined = u.created_at?.split(' ')[0] || u.joinDate || '';
+    const color  = u.color || colors[i % colors.length];
+    return `
+    <div class="admin-user-item" onclick="adminOpenUserById(${uid})">
+      <div class="admin-user-avatar" style="background:${color}">${name.slice(0,2)}</div>
       <div class="admin-user-info">
-        <div class="admin-user-name">${u.name}</div>
-        <div class="admin-user-id">${u.tid}</div>
-        <div class="admin-user-meta">📅 انضم ${formatDate(u.joinDate)}</div>
+        <div class="admin-user-name">${name}</div>
+        <div class="admin-user-id">${tid}</div>
+        <div class="admin-user-meta">📅 انضم ${formatDate(joined)}</div>
       </div>
       <div class="admin-user-right">
-        <div class="admin-user-balance">${u.balance} ر</div>
-        <div class="admin-user-reports">${u.reports} تقارير</div>
-        <div class="admin-user-status ${u.status}">${u.status==='active'?'✅ نشط':'🚫 موقوف'}</div>
+        <div class="admin-user-balance">${bal} ر</div>
+        <div class="admin-user-reports">${reps} تقارير</div>
+        <div class="admin-user-status ${status}">${status==='active'?'✅ نشط':status==='banned'?'🚫 محظور':'⏸️ موقوف'}</div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function adminFilterUsers(q) { adminRenderUsers(q); }
@@ -5492,35 +5587,60 @@ function adminUserFilter(el, mode) {
   adminRenderUsers(document.getElementById('adminUserSearch')?.value||'');
 }
 
+// يفتح مستخدم من القائمة القديمة (mock fallback)
 function adminOpenUser(uid) {
   const u = ADMIN.users.find(x=>x.id===uid);
+  if (u) { _adminCurrentUser = {id: u.id, name: u.name, telegram_id: u.tid, balance: u.balance, reports_count: u.reports, status: u.status, created_at: u.joinDate}; _renderAdminUserModal(); }
+}
+
+// يفتح مستخدم من API بـ DB id
+async function adminOpenUserById(uid) {
+  try {
+    const u = await API.get('/admin/users/' + uid);
+    _adminCurrentUser = u;
+    _renderAdminUserModal();
+  } catch(e) {
+    // fallback: search local
+    const src = window._adminUsers || [];
+    const u = src.find(x=>x.id===uid);
+    if (u) { _adminCurrentUser = u; _renderAdminUserModal(); }
+  }
+}
+
+function _renderAdminUserModal() {
+  const u = _adminCurrentUser;
   if (!u) return;
-  _adminCurrentUser = u;
-  document.getElementById('adminUserModalTitle').textContent = '👤 ' + u.name;
+  const name   = u.name || u.username || 'مستخدم';
+  const bal    = (u.balance ?? 0).toFixed(2);
+  const reps   = u.reports_count ?? 0;
+  const status = u.status || 'active';
+  const tid    = String(u.telegram_id || '');
+  const joined = (u.created_at||'').split(' ')[0] || '';
+  document.getElementById('adminUserModalTitle').textContent = '👤 ' + name;
   document.getElementById('adminUserModalBody').innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
       <div class="user-detail-stat">
-        <div class="user-detail-stat-val">${u.balance}</div>
+        <div class="user-detail-stat-val">${bal}</div>
         <div class="user-detail-stat-lbl">رصيد (ريال)</div>
       </div>
       <div class="user-detail-stat">
-        <div class="user-detail-stat-val">${u.reports}</div>
+        <div class="user-detail-stat-val">${reps}</div>
         <div class="user-detail-stat-lbl">تقارير</div>
       </div>
       <div class="user-detail-stat">
-        <div class="user-detail-stat-val" style="font-size:16px;color:${u.status==='active'?'var(--success)':'var(--danger)'}">${u.status==='active'?'✅':'🚫'}</div>
+        <div class="user-detail-stat-val" style="font-size:16px;color:${status==='active'?'var(--success)':'var(--danger)'}">${status==='active'?'✅':'🚫'}</div>
         <div class="user-detail-stat-lbl">الحالة</div>
       </div>
     </div>
-    <div class="detail-row"><div class="detail-key">Telegram ID</div><div class="detail-val" style="font-family:'IBM Plex Mono'">${u.tid}</div></div>
-    <div class="detail-row"><div class="detail-key">تاريخ الانضمام</div><div class="detail-val">${formatDate(u.joinDate)}</div></div>
-    <div class="detail-row" style="border:none"><div class="detail-key">إجمالي الإنفاق</div><div class="detail-val" style="color:var(--teal)">${u.reports * 5} ريال</div></div>
+    <div class="detail-row"><div class="detail-key">Telegram ID</div><div class="detail-val" style="font-family:'IBM Plex Mono'">${tid}</div></div>
+    <div class="detail-row"><div class="detail-key">تاريخ الانضمام</div><div class="detail-val">${formatDate(joined)}</div></div>
+    <div class="detail-row"><div class="detail-key">الدور</div><div class="detail-val">${u.role||'user'}</div></div>
+    <div class="detail-row" style="border:none"><div class="detail-key">إجمالي التقارير × 10</div><div class="detail-val" style="color:var(--teal)">${reps * 10} ريال (تقديري)</div></div>
     <div style="margin-top:14px">
       <button class="admin-btn primary" style="width:100%;justify-content:center;padding:10px;margin-bottom:8px" onclick="adminChargeUser()">💰 شحن رصيد يدوي</button>
     </div>`;
-  // زر الإيقاف
   const btn = document.getElementById('adminUserSuspendBtn');
-  if (u.status === 'active') {
+  if (status === 'active') {
     btn.textContent = '🚫 إيقاف الحساب';
     btn.style.cssText = 'background:var(--danger-soft);color:var(--danger)';
   } else {
@@ -5530,31 +5650,35 @@ function adminOpenUser(uid) {
   openModal('adminUserModal');
 }
 
-function adminToggleSuspend() {
+async function adminToggleSuspend() {
   const u = _adminCurrentUser;
   if (!u) return;
-  u.status = u.status === 'active' ? 'suspended' : 'active';
-  closeModal('adminUserModal');
-  adminRenderUsers('');
-  showToast(u.status==='active' ? `✅ تم تفعيل ${u.name}` : `🚫 تم إيقاف ${u.name}`);
+  const isBanned = u.status === 'banned' || u.status === 'suspended';
+  try {
+    const endpoint = isBanned ? `/admin/users/${u.id}/unban` : `/admin/users/${u.id}/ban`;
+    await API.post(endpoint, {});
+    u.status = isBanned ? 'active' : 'banned';
+    closeModal('adminUserModal');
+    // تحديث القائمة
+    try { const res = await API.adminUsers(); if (res?.users) window._adminUsers = res.users; } catch(e){}
+    adminRenderUsers('');
+    showToast(isBanned ? `✅ تم تفعيل ${u.name||'المستخدم'}` : `🚫 تم إيقاف ${u.name||'المستخدم'}`);
+  } catch(e) { showToast('❌ ' + (e.detail || e.message)); }
 }
 
-function adminChargeUser() {
+async function adminChargeUser() {
   const u = _adminCurrentUser;
   if (!u) return;
   const amountStr = prompt('أدخل مبلغ الشحن (ريال):');
   const amount = parseFloat(amountStr);
   if (!amount || isNaN(amount) || amount <= 0) { showToast('❌ مبلغ غير صحيح'); return; }
-  u.balance += amount;
-  // إذا كان المستخدم الحالي
-  if (u.tid === String(MOCK.user.tid)) {
-    state.balance += amount;
-    state.transactions.unshift({type:'credit',label:`شحن يدوي من الأدمن`,amount:+amount,date:new Date().toISOString().split('T')[0]});
-    updateBalance(); renderTransactions();
-  }
-  closeModal('adminUserModal');
-  adminRenderUsers('');
-  showToast(`✅ تم شحن ${amount} ريال لـ ${u.name}`);
+  try {
+    const res = await API.post('/wallet/charge', { user_id: u.id, amount, note: 'شحن يدوي من الأدمن' });
+    closeModal('adminUserModal');
+    try { const r2 = await API.adminUsers(); if (r2?.users) window._adminUsers = r2.users; } catch(e){}
+    adminRenderUsers('');
+    showToast(`✅ تم شحن ${amount} ريال لـ ${u.name||'المستخدم'}`);
+  } catch(e) { showToast('❌ ' + (e.detail || e.message)); }
 }
 
 // تصدير كزر في الهوم للوصول السريع للأدمن (يُطلق من triple-tap على اللوجو)
@@ -5573,6 +5697,104 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+//  ADMIN — Charge Codes
+// ══════════════════════════════════════════════════════════════
+let _codesFilter = 'all';
+
+async function adminCreateCodes() {
+  const amount = parseFloat(document.getElementById('codeAmount').value);
+  const count  = parseInt(document.getElementById('codeCount').value) || 1;
+  const note   = document.getElementById('codeNote').value.trim();
+  if (!amount || amount <= 0) { showToast('❌ أدخل مبلغاً صحيحاً'); return; }
+  try {
+    const res = await API.post('/admin/charge-codes', { amount, count, note });
+    // عرض الكودات المُنشأة
+    const resultDiv = document.getElementById('newCodesResult');
+    const listDiv   = document.getElementById('newCodesList');
+    listDiv.innerHTML = res.codes.map(c =>
+      `<div style="padding:6px 10px;background:var(--surface2);border-radius:8px;margin-bottom:6px;
+       display:flex;justify-content:space-between;align-items:center;direction:ltr">
+        <strong style="color:var(--teal);letter-spacing:1px">${c}</strong>
+        <span style="font-size:11px;color:var(--text-muted)">${res.amount} ر</span>
+      </div>`
+    ).join('');
+    resultDiv.style.display = 'block';
+    document.getElementById('codeAmount').value = '';
+    document.getElementById('codeCount').value  = '1';
+    document.getElementById('codeNote').value   = '';
+    showToast(`✅ تم إنشاء ${res.codes.length} كود`);
+    // تحديث القائمة
+    adminLoadCodes();
+  } catch(e) { showToast('❌ ' + (e.detail || e.message)); }
+}
+
+function copyAllCodes() {
+  const codes = [...document.querySelectorAll('#newCodesList strong')].map(el => el.textContent);
+  if (!codes.length) return;
+  navigator.clipboard.writeText(codes.join('\n'))
+    .then(() => showToast('✅ تم نسخ ' + codes.length + ' كود'))
+    .catch(() => showToast('❌ فشل النسخ'));
+}
+
+function filterCodes(f) {
+  _codesFilter = f;
+  ['all','unused','used'].forEach(id => {
+    document.getElementById('chip-' + (id==='all'?'all-codes':id))?.classList.toggle('active', id===f);
+  });
+  adminLoadCodes();
+}
+
+async function adminLoadCodes() {
+  const list = document.getElementById('adminCodeList');
+  if (!list) return;
+  list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">جاري التحميل...</div>';
+  try {
+    const param = _codesFilter === 'unused' ? '?is_used=0' : _codesFilter === 'used' ? '?is_used=1' : '';
+    const res = await API.get('/admin/charge-codes' + param);
+    if (!res.codes?.length) {
+      list.innerHTML = '<div class="empty"><span class="empty-icon">🎟️</span><div class="empty-title">لا توجد كودات</div></div>';
+      return;
+    }
+    list.innerHTML = res.codes.map(c => `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);
+           padding:12px;margin-bottom:8px;direction:ltr">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <strong style="font-family:monospace;color:${c.is_used?'var(--text-muted)':'var(--teal)'};
+                  font-size:14px;letter-spacing:1px;
+                  text-decoration:${c.is_used?'line-through':'none'}">${c.code}</strong>
+          <span style="background:${c.is_used?'var(--surface2)':'var(--teal-pale)'};
+                color:${c.is_used?'var(--text-muted)':'var(--teal)'};
+                font-size:11px;padding:2px 8px;border-radius:20px;font-weight:700">
+            ${c.amount} ريال
+          </span>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);direction:rtl;text-align:right">
+          ${c.is_used
+            ? `✅ استُخدم بواسطة: ${c.used_by_name||'مجهول'} — ${c.used_at||''}`
+            : `⏳ متاح — أُنشئ: ${c.created_at?.split(' ')[0]||''}`
+          }
+          ${c.note ? ` | ${c.note}` : ''}
+        </div>
+        ${!c.is_used ? `
+        <button onclick="adminDeleteCode('${c.code}')" style="margin-top:8px;width:100%;
+          background:var(--danger-soft);color:var(--danger);border:none;border-radius:6px;
+          padding:6px;font-size:12px;cursor:pointer;font-family:var(--font)">🗑️ حذف</button>` : ''}
+      </div>
+    `).join('');
+  } catch(e) { list.innerHTML = '<div class="empty"><div class="empty-title">خطأ في التحميل</div></div>'; }
+}
+
+async function adminDeleteCode(code) {
+  if (!confirm(\`حذف الكود ${code}؟\`)) return;
+  try {
+    await API.delete('/admin/charge-codes/' + code);
+    showToast('✅ تم حذف الكود');
+    adminLoadCodes();
+  } catch(e) { showToast('❌ ' + (e.detail || e.message)); }
+}
+
 </script>
 <!-- Admin User Detail Modal -->
 <div class="modal-overlay" id="adminUserModal" onclick="closeModal('adminUserModal')">
