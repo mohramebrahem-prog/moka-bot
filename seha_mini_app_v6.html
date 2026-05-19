@@ -1,52 +1,4 @@
-async function cmpGoToPreview() {
-  const name=document.getElementById('cmpFName')?.value.trim()||'';
-  const id=document.getElementById('cmpFId')?.value.trim()||'';
-  const nat=document.getElementById('cmpFNat')?.value.trim()||'';
-  const rel=document.getElementById('cmpFRel')?.value.trim()||'';
-  const emp=document.getElementById('cmpFEmp')?.value.trim()||'';
-  const admDate=document.getElementById('cmpFAdmDate')?.value||'';
-  const disDate=document.getElementById('cmpFDisDate')?.value||'';
-  if(!name){showToast('❌ أدخل اسم المرافق');return;}
-  if(!id||id.length!==10){showToast('❌ رقم الهوية يجب أن يكون 10 أرقام');return;}
-  if(!nat){showToast('❌ أدخل الجنسية');return;}
-  if(!rel){showToast('❌ أدخل صلة القرابة');return;}
-  if(!emp){showToast('❌ أدخل جهة العمل');return;}
-  if(!admDate){showToast('❌ أدخل تاريخ الدخول');return;}
-  if(!disDate){showToast('❌ أدخل تاريخ الخروج');return;}
-  if(!cmpState.selectedHosp){cmpShowStep('hospital');showToast('🏥 اختر المستشفى أولاً');return;}
-  if(!cmpState.selectedDoc){cmpShowStep('doctor');showToast('👨‍⚕️ اختر الطبيب أولاً');return;}
-  const rnum=cmpState.pendingRnum||cmpGenRnum();
-  cmpState.pendingRnum=rnum;
-  cmpState._previewData={name,id,nat,rel,emp,admDate,disDate,rnum};
-  // فتح modal
-  document.getElementById('cmpModalPrice').textContent=state.reportPrice;
-  document.getElementById('cmpModalName').textContent=name;
-  document.getElementById('cmpModalId').textContent=id;
-  document.getElementById('cmpModalRel').textContent=rel;
-  document.getElementById('cmpModalHosp').textContent=cmpState.selectedHosp?.name||'';
-  document.getElementById('cmpModalDoc').textContent='د. '+(cmpState.selectedDoc?.name||'');
-  document.getElementById('cmpConfirmBtn').disabled=true;
-  document.getElementById('cmpPreviewWrap').innerHTML='<div style="text-align:center;padding:20px;color:var(--text-muted)">⏳ جاري تحميل المعاينة...</div>';
-  openModal('cmpConfirmModal');
-  // جلب صورة
-  try {
-    const res=await fetch(API.BASE+'/reports/preview-image',{
-      method:'POST',headers:API.headers(),
-      body:JSON.stringify({
-        report_type:'companion',
-        hospital_id:cmpState.selectedHosp?.id||0,
-        doctor_id:cmpState.selectedDoc?.id||0,
-        patient_data:{companion_name:name,national_id:id,nationality:nat,employer:emp,relation:rel,adm_date:admDate,dis_date:disDate}
-      })
-    });
-    const d=await res.json();
-    if(d.data){
-      document.getElementById('cmpPreviewWrap').innerHTML=
-        '<img src="data:'+d.mime+';base64,'+d.data+'" style="width:100%;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.2);margin-bottom:8px"/>';
-    } else { document.getElementById('cmpPreviewWrap').innerHTML=''; }
-  } catch(e){ document.getElementById('cmpPreviewWrap').innerHTML=''; }
-  finally { document.getElementById('cmpConfirmBtn').disabled=false; }
-}<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -5206,9 +5158,8 @@ function cmpCalcDuration(admDateInput,disDateInput) {
   } catch(e){return{en:'',ar:'',days:0};}
 }
 
-// ── GoTo Preview ──
-function cmpGoToPreview() {
-  cmpUpdateTemplate();
+
+async function cmpGoToPreview() {
   const name=document.getElementById('cmpFName')?.value.trim()||'';
   const id=document.getElementById('cmpFId')?.value.trim()||'';
   const nat=document.getElementById('cmpFNat')?.value.trim()||'';
@@ -5216,8 +5167,6 @@ function cmpGoToPreview() {
   const emp=document.getElementById('cmpFEmp')?.value.trim()||'';
   const admDate=document.getElementById('cmpFAdmDate')?.value||'';
   const disDate=document.getElementById('cmpFDisDate')?.value||'';
-  const issDate=document.getElementById('cmpFIssDate')?.value||disDate;
-
   if(!name){showToast('❌ أدخل اسم المرافق');return;}
   if(!id||id.length!==10){showToast('❌ رقم الهوية يجب أن يكون 10 أرقام');return;}
   if(!nat){showToast('❌ أدخل الجنسية');return;}
@@ -5227,72 +5176,30 @@ function cmpGoToPreview() {
   if(!disDate){showToast('❌ أدخل تاريخ الخروج');return;}
   if(!cmpState.selectedHosp){cmpShowStep('hospital');showToast('🏥 اختر المستشفى أولاً');return;}
   if(!cmpState.selectedDoc){cmpShowStep('doctor');showToast('👨‍⚕️ اختر الطبيب أولاً');return;}
-
-  // مدة الإجازة
-  const dur=cmpCalcDuration(admDate,disDate);
-
-  // تاريخ بصيغة DD-MM-YYYY للعرض
-  function dispDate(inputStr){if(!inputStr)return'';const[y,m,d]=inputStr.split('-');return`${d}-${m}-${y}`;}
-
-  // الوقت الحالي للإصدار
-  const now=new Date();
-  const h=now.getHours()%12||12,mn=now.getMinutes(),ap=now.getHours()>=12?'PM':'AM';
-  const issTime=`${String(h).padStart(2,'0')}:${String(mn).padStart(2,'0')} ${ap}`;
-  const issDt=issDate?new Date(issDate):new Date(disDate);
-  const issDateFmt=issDt.toLocaleDateString('en-US',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-
-  // ترجمة
-  const nameEn=translateName(name);
-  const natEn=natToEn(nat);
-  const docEn=translateName(cmpState.selectedDoc.name);
-
   const rnum=cmpState.pendingRnum||cmpGenRnum();
   cmpState.pendingRnum=rnum;
-
-  // ملء الوثيقة
-  const s=(eid,v)=>{const el=document.getElementById(eid);if(el)el.textContent=v||'—';};
-  s('ccv-leave-id',rnum);
-  s('ccv-dur-en',dur.en);
-  s('ccv-dur-ar',dur.ar);
-  s('ccv-adm-en',dispDate(admDate));
-  s('ccv-adm-ar',dispDate(admDate));
-  s('ccv-dis-en',dispDate(disDate));
-  s('ccv-dis-ar',dispDate(disDate));
-  s('ccv-issue',`${dispDate(issDate||disDate)} - ${issTime}  ${issDateFmt}`);
-  s('ccv-name-en',nameEn);
-  s('ccv-name-ar',name);
-  s('ccv-nid',id);
-  s('ccv-nat-en',natEn);
-  s('ccv-nat-ar',nat);
-  s('ccv-rel',rel);
-  s('ccv-emp',emp);
-  s('ccv-doc-en',docEn);
-  s('ccv-doc-ar','د. '+cmpState.selectedDoc.name);
-  s('ccv-pos-en',cmpState.selectedDoc.spec);
-  s('ccv-pos-ar',cmpState.selectedDoc.spec);
-  s('ccv-hosp-name',cmpState.selectedHosp.name);
-
-  // QR
-  buildMockQR2(rnum,'cmpCertQR');
-
-  // رصيد
-  document.getElementById('cmpPvPrice').textContent=state.reportPrice;
-  document.getElementById('cmpPvBalLeft').textContent=(state.balance-state.reportPrice).toFixed(2);
-
-  // حفظ للتأكيد
-  cmpState._previewData={name,nameEn,id,nat,natEn,rel,emp,admDate,disDate,issDate,issTime,rnum,dur};
-
-  // تحديث لوحة التعديل
-  document.getElementById('cmpEditAdmDate').value=admDate;
-  document.getElementById('cmpEditDisDate').value=disDate;
-  document.getElementById('cmpEditIssDate').value=issDate||'';
-  document.getElementById('cmpEditRel').value=rel;
-  document.getElementById('cmpEditEmp').value=emp;
-  document.getElementById('cmpEditPanel').style.display='none';
-  _cmpCertZoomed=false;
-  document.getElementById('cmpCertWrap').style.transform='';
-
-  cmpShowStep('preview');
+  cmpState._previewData={name,id,nat,rel,emp,admDate,disDate,rnum};
+  document.getElementById('cmpModalPrice').textContent=state.reportPrice;
+  document.getElementById('cmpModalName').textContent=name;
+  document.getElementById('cmpModalId').textContent=id;
+  document.getElementById('cmpModalRel').textContent=rel;
+  document.getElementById('cmpModalHosp').textContent=cmpState.selectedHosp?.name||'';
+  document.getElementById('cmpModalDoc').textContent='د. '+(cmpState.selectedDoc?.name||'');
+  document.getElementById('cmpConfirmBtn').disabled=true;
+  document.getElementById('cmpPreviewWrap').innerHTML='<div style="text-align:center;padding:20px;color:var(--text-muted)">⏳ جاري تحميل المعاينة...</div>';
+  openModal('cmpConfirmModal');
+  try {
+    const res=await fetch(API.BASE+'/reports/preview-image',{
+      method:'POST',headers:API.headers(),
+      body:JSON.stringify({report_type:'companion',hospital_id:cmpState.selectedHosp?.id||0,
+        doctor_id:cmpState.selectedDoc?.id||0,
+        patient_data:{companion_name:name,national_id:id,nationality:nat,employer:emp,relation:rel,adm_date:admDate,dis_date:disDate}})
+    });
+    const d=await res.json();
+    document.getElementById('cmpPreviewWrap').innerHTML=d.data?
+      '<img src="data:'+d.mime+';base64,'+d.data+'" style="width:100%;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.2)"/>':'';
+  } catch(e){ document.getElementById('cmpPreviewWrap').innerHTML=''; }
+  finally { document.getElementById('cmpConfirmBtn').disabled=false; }
 }
 
 function cmpToggleEditPanel() {
