@@ -1,4 +1,52 @@
-<!DOCTYPE html>
+async function cmpGoToPreview() {
+  const name=document.getElementById('cmpFName')?.value.trim()||'';
+  const id=document.getElementById('cmpFId')?.value.trim()||'';
+  const nat=document.getElementById('cmpFNat')?.value.trim()||'';
+  const rel=document.getElementById('cmpFRel')?.value.trim()||'';
+  const emp=document.getElementById('cmpFEmp')?.value.trim()||'';
+  const admDate=document.getElementById('cmpFAdmDate')?.value||'';
+  const disDate=document.getElementById('cmpFDisDate')?.value||'';
+  if(!name){showToast('❌ أدخل اسم المرافق');return;}
+  if(!id||id.length!==10){showToast('❌ رقم الهوية يجب أن يكون 10 أرقام');return;}
+  if(!nat){showToast('❌ أدخل الجنسية');return;}
+  if(!rel){showToast('❌ أدخل صلة القرابة');return;}
+  if(!emp){showToast('❌ أدخل جهة العمل');return;}
+  if(!admDate){showToast('❌ أدخل تاريخ الدخول');return;}
+  if(!disDate){showToast('❌ أدخل تاريخ الخروج');return;}
+  if(!cmpState.selectedHosp){cmpShowStep('hospital');showToast('🏥 اختر المستشفى أولاً');return;}
+  if(!cmpState.selectedDoc){cmpShowStep('doctor');showToast('👨‍⚕️ اختر الطبيب أولاً');return;}
+  const rnum=cmpState.pendingRnum||cmpGenRnum();
+  cmpState.pendingRnum=rnum;
+  cmpState._previewData={name,id,nat,rel,emp,admDate,disDate,rnum};
+  // فتح modal
+  document.getElementById('cmpModalPrice').textContent=state.reportPrice;
+  document.getElementById('cmpModalName').textContent=name;
+  document.getElementById('cmpModalId').textContent=id;
+  document.getElementById('cmpModalRel').textContent=rel;
+  document.getElementById('cmpModalHosp').textContent=cmpState.selectedHosp?.name||'';
+  document.getElementById('cmpModalDoc').textContent='د. '+(cmpState.selectedDoc?.name||'');
+  document.getElementById('cmpConfirmBtn').disabled=true;
+  document.getElementById('cmpPreviewWrap').innerHTML='<div style="text-align:center;padding:20px;color:var(--text-muted)">⏳ جاري تحميل المعاينة...</div>';
+  openModal('cmpConfirmModal');
+  // جلب صورة
+  try {
+    const res=await fetch(API.BASE+'/reports/preview-image',{
+      method:'POST',headers:API.headers(),
+      body:JSON.stringify({
+        report_type:'companion',
+        hospital_id:cmpState.selectedHosp?.id||0,
+        doctor_id:cmpState.selectedDoc?.id||0,
+        patient_data:{companion_name:name,national_id:id,nationality:nat,employer:emp,relation:rel,adm_date:admDate,dis_date:disDate}
+      })
+    });
+    const d=await res.json();
+    if(d.data){
+      document.getElementById('cmpPreviewWrap').innerHTML=
+        '<img src="data:'+d.mime+';base64,'+d.data+'" style="width:100%;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.2);margin-bottom:8px"/>';
+    } else { document.getElementById('cmpPreviewWrap').innerHTML=''; }
+  } catch(e){ document.getElementById('cmpPreviewWrap').innerHTML=''; }
+  finally { document.getElementById('cmpConfirmBtn').disabled=false; }
+}<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
@@ -1645,179 +1693,6 @@ body {
   </div>
 
   <!-- Step 4: Preview -->
-  <div id="step-preview" style="display:none">
-    <div class="page-header">👁️ معاينة الشهادة</div>
-    <div class="steps">
-      <div class="step done">✓</div><div class="step-line done"></div>
-      <div class="step done">✓</div><div class="step-line done"></div>
-      <div class="step done">✓</div><div class="step-line done"></div>
-      <div class="step active">✓</div>
-    </div>
-
-    <!-- زر تصغير/تكبير المعاينة -->
-    <div class="cert-zoom-note">
-      <span>👁️</span> معاينة الشهادة الرسمية — اضغط للتكبير
-    </div>
-
-    <!-- ══ شهادة طبق الأصل من القالب ══ -->
-    <div class="cert-wrap" onclick="toggleCertZoom()" id="certWrap">
-
-      <!-- Header: سيها | المملكة | شكل هندسي -->
-      <div class="cert-header">
-        <!-- يسار: شعار سيها -->
-        <div class="cert-logo-seha">
-          <div class="cert-seha-icon"><div class="cert-seha-checkmark">✓</div></div>
-          <div>
-            <div class="cert-logo-seha-text">صحـة</div>
-            <span class="cert-logo-seha-en">Seha</span>
-          </div>
-        </div>
-        <!-- وسط: المملكة العربية السعودية -->
-        <div class="cert-center-logo">
-          <span class="cert-saudi-title">المملكة العربية السعودية</span>
-          <span class="cert-saudi-en">Kingdom of Saudi Arabia</span>
-        </div>
-        <!-- يمين: شكل هندسي -->
-        <div class="cert-geo-shape"><div class="cert-geo"></div></div>
-      </div>
-
-      <!-- العنوان -->
-      <div class="cert-title-block">
-        <div class="cert-title-ar">تقرير إجازة مرضية</div>
-        <div class="cert-title-en">Sick Leave Report</div>
-      </div>
-
-      <!-- الجدول الرئيسي -->
-      <table class="cert-table">
-        <tbody>
-          <!-- Leave ID -->
-          <tr>
-            <td class="cert-col-label">Leave ID</td>
-            <td class="cert-col-val wide" id="cv-leave-id" colspan="2" style="direction:ltr;font-family:'IBM Plex Mono',monospace;font-size:9px">—</td>
-            <td class="cert-col-label-ar">رمز الإجازة</td>
-          </tr>
-          <!-- Leave Duration — dark row -->
-          <tr class="cert-row-dark">
-            <td class="cert-col-label" style="color:white">Leave Duration</td>
-            <td class="cert-col-val" id="cv-duration-en" style="color:white;direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-duration-ar" style="color:white;direction:rtl">—</td>
-            <td class="cert-col-label-ar" style="color:white">مدة الإجازة</td>
-          </tr>
-          <!-- Admission Date -->
-          <tr>
-            <td class="cert-col-label">Admission Date</td>
-            <td class="cert-col-val" id="cv-adm-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-adm-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">تاريخ الدخول</td>
-          </tr>
-          <!-- Discharge Date -->
-          <tr>
-            <td class="cert-col-label">Discharge Date</td>
-            <td class="cert-col-val" id="cv-dis-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-dis-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">تاريخ الخروج</td>
-          </tr>
-          <!-- Issue Date -->
-          <tr>
-            <td class="cert-col-label">Issue Date</td>
-            <td class="cert-col-val wide" id="cv-issue" colspan="2" style="direction:ltr">—</td>
-            <td class="cert-col-label-ar">تاريخ إصدار التقرير</td>
-          </tr>
-          <!-- Name -->
-          <tr>
-            <td class="cert-col-label">Name</td>
-            <td class="cert-col-val" id="cv-name-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-name-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">الاسم</td>
-          </tr>
-          <!-- National ID -->
-          <tr>
-            <td class="cert-col-label">National ID / Iqama</td>
-            <td class="cert-col-val wide cert-id" id="cv-nid" colspan="2" style="direction:ltr;font-size:9px">—</td>
-            <td class="cert-col-label-ar">رقم الهوية / الإقامة</td>
-          </tr>
-          <!-- Nationality -->
-          <tr>
-            <td class="cert-col-label">Nationality</td>
-            <td class="cert-col-val" id="cv-nat-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-nat-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">الجنسية</td>
-          </tr>
-          <!-- Employer -->
-          <tr>
-            <td class="cert-col-label">Employer</td>
-            <td class="cert-col-val wide" id="cv-emp" colspan="2" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">جهة العمل</td>
-          </tr>
-          <!-- Practitioner Name -->
-          <tr>
-            <td class="cert-col-label">Practitioner Name</td>
-            <td class="cert-col-val" id="cv-doc-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-doc-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">اسم الممارس</td>
-          </tr>
-          <!-- Position -->
-          <tr>
-            <td class="cert-col-label">Position</td>
-            <td class="cert-col-val" id="cv-pos-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="cv-pos-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">المسمى الوظيفي</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <!-- Bottom Section -->
-      <div class="cert-bottom">
-        <!-- يسار: QR + نص التحقق + توقيع -->
-        <div class="cert-bottom-left">
-          <div class="cert-qr-box">
-            <!-- QR mock مصغر -->
-            <div class="cert-qr-grid" id="certQR"></div>
-          </div>
-          <div class="cert-verify-text">
-            للتحقق من بيانات التقرير يرجى التأكد من زيارة موقع منصة صحة الرسمي
-            <span class="cert-verify-en">To check the report please visit Seha's offical website</span>
-          </div>
-          <div class="cert-signature-line"></div>
-        </div>
-        <!-- يمين: المستشفى + الترخيص + NHIC -->
-        <div class="cert-bottom-right">
-          <div class="cert-license">
-            <span>رقم الترخيص :</span>
-          </div>
-          <div class="cert-hosp-block" id="cv-hosp-name">—</div>
-          <div class="cert-sig-line"></div>
-          <div class="cert-nhic">
-            <div class="cert-nhic-icon">
-              <!-- NHIC icon mock -->
-              <svg width="32" height="28" viewBox="0 0 32 28" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M16 2L28 8V20L16 26L4 20V8L16 2Z" stroke="#2c3e77" stroke-width="1.5" fill="none"/>
-                <path d="M12 14H20M16 10V18" stroke="#2c3e77" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </div>
-            <div class="cert-nhic-name">
-              المركز الوطني للمعلومات الصحية<br>
-              <span style="font-size:5px;direction:ltr">NATIONAL HEALTH INFORMATION CENTER</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <!-- نهاية الشهادة -->
-
-    <!-- خصم الرصيد -->
-    <div style="margin:0 12px 10px;background:var(--teal-pale);border-radius:var(--r);padding:11px 14px;display:flex;align-items:center;gap:10px">
-      <span>💰</span>
-      <div>
-        <div style="font-size:13px;font-weight:700;color:var(--teal)">سيُخصم من رصيدك</div>
-        <div style="font-size:12px;color:var(--text-muted)"><span id="pvPrice">5</span> ريال · يتبقى <span id="pvBalLeft">40.00</span> ريال</div>
-      </div>
-    </div>
-    <div style="margin:0 12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
-      <button class="btn btn-secondary" onclick="showStep('data')">✏️ تعديل</button>
-      <button class="btn btn-primary" id="confirmBtn" onclick="confirmReport()">✅ تأكيد الإصدار</button>
-    </div>
-  </div>
 </div>
 
 <!-- ═══════════════════════════════ MASHAD FLOW ═══════════════════════════════ -->
@@ -2166,216 +2041,6 @@ body {
   </div>
 
   <!-- Step C4: Preview -->
-  <div id="cmp-step-preview" style="display:none">
-    <div class="page-header">👁️ معاينة وثيقة المرافقة</div>
-    <div class="steps">
-      <div class="step done">✓</div><div class="step-line done"></div>
-      <div class="step done">✓</div><div class="step-line done"></div>
-      <div class="step done">✓</div><div class="step-line done"></div>
-      <div class="step active">✓</div>
-    </div>
-
-    <div class="cert-zoom-note"><span>👁️</span> معاينة وثيقة مرافقة مريض الرسمية — اضغط للتكبير</div>
-
-    <!-- ══ وثيقة مرافقة مريض ══ -->
-    <div class="cert-wrap" onclick="toggleCmpZoom()" id="cmpCertWrap" style="position:relative">
-
-      <!-- Header -->
-      <div class="cert-header" style="background:linear-gradient(135deg,#0a4a44,#0B7A6E)">
-        <div class="cert-logo-seha">
-          <div class="cert-seha-icon" style="background:linear-gradient(135deg,#12A090,#0B7A6E)"><div class="cert-seha-checkmark">✓</div></div>
-          <div>
-            <div class="cert-logo-seha-text" style="color:white">صحـة</div>
-            <span class="cert-logo-seha-en" style="color:rgba(255,255,255,.6)">Seha</span>
-          </div>
-        </div>
-        <div class="cert-center-logo">
-          <span class="cert-saudi-title" style="color:white">المملكة العربية السعودية</span>
-          <span class="cert-saudi-en" style="color:rgba(255,255,255,.7)">Kingdom of Saudi Arabia</span>
-        </div>
-        <div class="cert-geo-shape"><div class="cert-geo" style="background:rgba(255,255,255,.15)"></div></div>
-      </div>
-
-      <!-- عنوان الوثيقة -->
-      <div class="cert-title-block" style="background:linear-gradient(135deg,#0B7A6E08,#12A09005);border-bottom:2px solid #0B7A6E22">
-        <div class="cert-title-ar" style="color:#0B7A6E">إجازة مرافقة مريض</div>
-        <div class="cert-title-en" style="color:#12A090">Companion Sick Leave</div>
-      </div>
-
-      <!-- جدول الوثيقة -->
-      <table class="cert-table">
-        <tbody>
-          <!-- Leave ID -->
-          <tr>
-            <td class="cert-col-label">Leave ID</td>
-            <td class="cert-col-val wide" id="ccv-leave-id" colspan="2" style="direction:ltr;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#0B7A6E;font-weight:700">—</td>
-            <td class="cert-col-label-ar">رمز الإجازة</td>
-          </tr>
-          <!-- Leave Duration — dark row -->
-          <tr class="cert-row-dark" style="background:#0B7A6E">
-            <td class="cert-col-label" style="color:white">Leave Duration</td>
-            <td class="cert-col-val" id="ccv-dur-en" style="color:white;direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-dur-ar" style="color:white;direction:rtl">—</td>
-            <td class="cert-col-label-ar" style="color:white">مدة الإجازة</td>
-          </tr>
-          <!-- Admission Date -->
-          <tr>
-            <td class="cert-col-label">Admission Date</td>
-            <td class="cert-col-val" id="ccv-adm-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-adm-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">تاريخ الدخول</td>
-          </tr>
-          <!-- Discharge Date -->
-          <tr>
-            <td class="cert-col-label">Discharge Date</td>
-            <td class="cert-col-val" id="ccv-dis-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-dis-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">تاريخ الخروج</td>
-          </tr>
-          <!-- Issue Date -->
-          <tr style="background:#F0FFF9">
-            <td class="cert-col-label" style="color:#0B7A6E">Issue Date</td>
-            <td class="cert-col-val wide" id="ccv-issue" colspan="2" style="direction:ltr;color:#0B7A6E;font-weight:700">—</td>
-            <td class="cert-col-label-ar" style="color:#0B7A6E">تاريخ الإصدار</td>
-          </tr>
-          <!-- Companion Name -->
-          <tr>
-            <td class="cert-col-label">Companion Name</td>
-            <td class="cert-col-val" id="ccv-name-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-name-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">اسم المرافق</td>
-          </tr>
-          <!-- National ID -->
-          <tr>
-            <td class="cert-col-label">National ID / Iqama</td>
-            <td class="cert-col-val wide cert-id" id="ccv-nid" colspan="2" style="direction:ltr;font-size:9px">—</td>
-            <td class="cert-col-label-ar">رقم الهوية / الإقامة</td>
-          </tr>
-          <!-- Nationality -->
-          <tr>
-            <td class="cert-col-label">Nationality</td>
-            <td class="cert-col-val" id="ccv-nat-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-nat-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">الجنسية</td>
-          </tr>
-          <!-- Relation -->
-          <tr>
-            <td class="cert-col-label">Relation</td>
-            <td class="cert-col-val wide" id="ccv-rel" colspan="2" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">صلة القرابة</td>
-          </tr>
-          <!-- Employer -->
-          <tr>
-            <td class="cert-col-label">Employer</td>
-            <td class="cert-col-val wide" id="ccv-emp" colspan="2" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">جهة العمل</td>
-          </tr>
-          <!-- Practitioner -->
-          <tr>
-            <td class="cert-col-label">Practitioner Name</td>
-            <td class="cert-col-val" id="ccv-doc-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-doc-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">اسم الممارس</td>
-          </tr>
-          <!-- Position -->
-          <tr>
-            <td class="cert-col-label">Position</td>
-            <td class="cert-col-val" id="ccv-pos-en" style="direction:ltr">—</td>
-            <td class="cert-col-val" id="ccv-pos-ar" style="direction:rtl">—</td>
-            <td class="cert-col-label-ar">المسمى الوظيفي</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <!-- Bottom Section -->
-      <div class="cert-bottom">
-        <div class="cert-bottom-left">
-          <div class="cert-qr-box">
-            <div class="cert-qr-grid" id="cmpCertQR"></div>
-          </div>
-          <div class="cert-verify-text">
-            للتحقق من بيانات إجازة المرافقة يرجى التأكد من زيارة موقع منصة صحة الرسمي
-            <span class="cert-verify-en">To verify the companion leave please visit Seha's official website</span>
-          </div>
-          <div class="cert-signature-line"></div>
-        </div>
-        <div class="cert-bottom-right">
-          <div class="cert-license"><span>رقم الترخيص :</span></div>
-          <div class="cert-hosp-block" id="ccv-hosp-name">—</div>
-          <div class="cert-sig-line"></div>
-          <div class="cert-nhic">
-            <div class="cert-nhic-icon">
-              <svg width="32" height="28" viewBox="0 0 32 28" fill="none">
-                <path d="M16 2L28 8V20L16 26L4 20V8L16 2Z" stroke="#0B7A6E" stroke-width="1.5" fill="none"/>
-                <path d="M12 14H20M16 10V18" stroke="#0B7A6E" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </div>
-            <div class="cert-nhic-name">
-              المركز الوطني للمعلومات الصحية<br>
-              <span style="font-size:5px;direction:ltr">NATIONAL HEALTH INFORMATION CENTER</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- شارة مرافقة -->
-      <div style="background:linear-gradient(135deg,#0B7A6E,#12A090);padding:6px 14px;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px">
-        <span style="color:white;font-size:9px;font-weight:700;letter-spacing:.5px">COMPANION SICK LEAVE</span>
-        <span style="color:rgba(255,255,255,.5);font-size:9px">|</span>
-        <span style="color:white;font-size:9px;font-weight:700">إجازة مرافقة مريض رسمية</span>
-      </div>
-    </div>
-    <!-- نهاية الوثيقة -->
-
-    <!-- تعديل البيانات قبل التأكيد -->
-    <div id="cmpEditPanel" style="display:none;margin:0 12px 10px">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow-sm)">
-        <div style="background:linear-gradient(135deg,#0B7A6E10,#12A09008);padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:13px;font-weight:800;color:#0B7A6E">✏️ تعديل البيانات</span>
-          <button onclick="document.getElementById('cmpEditPanel').style.display='none'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px">×</button>
-        </div>
-        <div style="padding:14px;display:grid;gap:10px">
-          <div class="form-row">
-            <div class="form-group" style="margin:0">
-              <label class="form-label">تاريخ الدخول</label>
-              <input class="form-input" type="date" id="cmpEditAdmDate" style="font-size:12px">
-            </div>
-            <div class="form-group" style="margin:0">
-              <label class="form-label">تاريخ الخروج</label>
-              <input class="form-input" type="date" id="cmpEditDisDate" style="font-size:12px">
-            </div>
-          </div>
-          <div class="form-group" style="margin:0">
-            <label class="form-label">تاريخ الإصدار</label>
-            <input class="form-input" type="date" id="cmpEditIssDate" style="font-size:12px">
-          </div>
-          <div class="form-group" style="margin:0">
-            <label class="form-label">صلة القرابة</label>
-            <input class="form-input" id="cmpEditRel" placeholder="زوج / ابن / أخ / والد" style="font-size:12px">
-          </div>
-          <div class="form-group" style="margin:0">
-            <label class="form-label">جهة العمل</label>
-            <input class="form-input" id="cmpEditEmp" placeholder="وزارة الصحة" style="font-size:12px">
-          </div>
-          <button class="btn btn-primary" style="background:linear-gradient(135deg,#0B7A6E,#12A090)" onclick="cmpApplyEdits()">✅ تطبيق التعديلات</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- خصم الرصيد -->
-    <div style="margin:0 12px 10px;background:#F0FFF9;border:1px solid #0B7A6E22;border-radius:var(--r);padding:11px 14px;display:flex;align-items:center;gap:10px">
-      <span>💰</span>
-      <div>
-        <div style="font-size:13px;font-weight:700;color:#0B7A6E">سيُخصم من رصيدك</div>
-        <div style="font-size:12px;color:var(--text-muted)"><span id="cmpPvPrice">5</span> ريال · يتبقى <span id="cmpPvBalLeft">40.00</span> ريال</div>
-      </div>
-    </div>
-    <div style="margin:0 12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
-      <button class="btn btn-secondary" onclick="cmpShowStep('data')" style="font-size:12px">← رجوع</button>
-      <button class="btn btn-secondary" onclick="cmpToggleEditPanel()" style="font-size:12px;color:#0B7A6E;border-color:#0B7A6E22">✏️ تعديل</button>
-      <button class="btn btn-primary" id="cmpConfirmBtn" onclick="cmpConfirmReport()" style="background:linear-gradient(135deg,#0B7A6E,#12A090);font-size:12px">✅ تأكيد</button>
-    </div>
-  </div>
 
 </div>
 
@@ -4147,7 +3812,7 @@ function fillMissingField() {
 // ══════════════════════════════════════════════════════════════
 //  PREVIEW
 // ══════════════════════════════════════════════════════════════
-function goToPreview() {
+async function goToPreview() {
   const name=document.getElementById('fName')?.value.trim()||'';
   const id=document.getElementById('fId')?.value.trim()||'';
   const nat=document.getElementById('fNat')?.value.trim()||'';
@@ -4162,27 +3827,40 @@ function goToPreview() {
   if(!days||days<1){showToast('❌ أدخل عدد الأيام');return;}
   if(!state.selectedHosp){showStep('hospital');showToast('🏥 اختر المستشفى أولاً');return;}
   if(!state.selectedDoc){showStep('doctor');showToast('👨‍⚕️ اختر الطبيب أولاً');return;}
-  const nameEn=translateName(name),natEn=natToEn(nat),docEn=translateName(state.selectedDoc.name);
-  const leaveDDMMYYYY=(()=>{const p=date.split('-');return`${p[2]}-${p[1]}-${p[0]}`;})();
-  const dur=calcDuration(leaveDDMMYYYY,days);
-  const now=new Date();
-  const fmtDDMMYYYY=dt=>`${String(dt.getDate()).padStart(2,'0')}-${String(dt.getMonth()+1).padStart(2,'0')}-${dt.getFullYear()}`;
-  const leaveId='PSL'+Math.random().toString().slice(2,13);
-  const s=(id2,val)=>{const el=document.getElementById(id2);if(el)el.textContent=val||'—';};
-  s('cv-leave-id',leaveId);s('cv-duration-en',dur.durEn);s('cv-duration-ar',dur.durAr);
-  s('cv-adm-en',dur.admDate);s('cv-adm-ar',dur.admDate);s('cv-dis-en',dur.disDate);s('cv-dis-ar',dur.disDate);
-  s('cv-issue',fmtDDMMYYYY(now));s('cv-name-en',nameEn);s('cv-name-ar',name);s('cv-nid',id);
-  s('cv-nat-en',natEn);s('cv-nat-ar',nat);s('cv-emp',emp);
-  s('cv-doc-en',docEn);s('cv-doc-ar',state.selectedDoc.name);
-  s('cv-pos-en',state.selectedDoc.spec);s('cv-pos-ar',state.selectedDoc.spec);
-  s('cv-hosp-name',state.selectedHosp.name);
-  buildMockQR(leaveId);
-  document.getElementById('pvPrice').textContent=state.reportPrice;
-  document.getElementById('pvBalLeft').textContent=(state.balance-state.reportPrice).toFixed(2);
-  state._previewData={name,id,nat,emp,date,days,leaveId};
-  showStep('preview');
-  document.getElementById('certWrap').style.transform='';
-  _certZoomed=false;
+  state._previewData={name,id,nat,emp,date,days};
+  // فتح modal المعاينة
+  document.getElementById('slModalPrice').textContent=state.reportPrice;
+  document.getElementById('slModalName').textContent=name;
+  document.getElementById('slModalId').textContent=id;
+  document.getElementById('slModalHosp').textContent=state.selectedHosp?.name||'';
+  document.getElementById('slModalDoc').textContent='د. '+(state.selectedDoc?.name||'');
+  document.getElementById('slModalDays').textContent=days+' يوم';
+  document.getElementById('slConfirmBtn').disabled=true;
+  document.getElementById('slPreviewWrap').innerHTML='<div style="text-align:center;padding:20px;color:var(--text-muted)">⏳ جاري تحميل المعاينة...</div>';
+  openModal('slConfirmModal');
+  // جلب صورة المعاينة
+  try {
+    const res=await fetch(API.BASE+'/reports/preview-image',{
+      method:'POST',headers:API.headers(),
+      body:JSON.stringify({
+        report_type:'report',
+        hospital_id:state.selectedHosp?.id||0,
+        doctor_id:state.selectedDoc?.id||0,
+        patient_data:{name,national_id:id,nationality:nat,employer:emp,leave_from:date,days}
+      })
+    });
+    const d=await res.json();
+    if(d.data){
+      document.getElementById('slPreviewWrap').innerHTML=
+        '<img src="data:'+d.mime+';base64,'+d.data+'" style="width:100%;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.2);margin-bottom:8px"/>';
+    } else {
+      document.getElementById('slPreviewWrap').innerHTML='';
+    }
+  } catch(e){
+    document.getElementById('slPreviewWrap').innerHTML='';
+  } finally {
+    document.getElementById('slConfirmBtn').disabled=false;
+  }
 }
 
 function buildMockQR(text) {
@@ -6053,6 +5731,46 @@ document.addEventListener('DOMContentLoaded', () => {
     <div style="display:flex;gap:8px">
       <button class="btn btn-secondary" onclick="closeModal('mshConfirmModal')" style="flex:1">❌ إلغاء</button>
       <button class="btn btn-primary" id="mshConfirmBtn" onclick="mshConfirmReport()" style="flex:2;background:linear-gradient(135deg,#7C3AED,#9F5FFF)">✅ تأكيد الإصدار</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal تأكيد إجازة مرضية -->
+<div class="modal-overlay" id="slConfirmModal" onclick="if(event.target===this)closeModal('slConfirmModal')">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-title">📋 معاينة الإجازة المرضية</div>
+    <p style="color:var(--text-muted);font-size:12px;margin:4px 0 10px">راجع الوثيقة جيداً — التكلفة: <b id="slModalPrice"></b> ريال</p>
+    <div id="slPreviewWrap" style="min-height:60px;margin-bottom:12px"></div>
+    <div style="background:var(--surface);border-radius:12px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.9">
+      <div>👤 <span id="slModalName"></span></div>
+      <div>🪪 <span id="slModalId"></span></div>
+      <div>📅 <span id="slModalDays"></span></div>
+      <div>🏥 <span id="slModalHosp"></span></div>
+      <div>👨‍⚕️ <span id="slModalDoc"></span></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="closeModal('slConfirmModal')" style="flex:1">❌ إلغاء</button>
+      <button class="btn btn-primary" id="slConfirmBtn" onclick="confirmReport();closeModal('slConfirmModal')" style="flex:2">✅ تأكيد الإصدار</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal تأكيد مرافقة مريض -->
+<div class="modal-overlay" id="cmpConfirmModal" onclick="if(event.target===this)closeModal('cmpConfirmModal')">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-title">🤝 معاينة وثيقة المرافقة</div>
+    <p style="color:var(--text-muted);font-size:12px;margin:4px 0 10px">راجع الوثيقة جيداً — التكلفة: <b id="cmpModalPrice"></b> ريال</p>
+    <div id="cmpPreviewWrap" style="min-height:60px;margin-bottom:12px"></div>
+    <div style="background:var(--surface);border-radius:12px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.9">
+      <div>👤 <span id="cmpModalName"></span></div>
+      <div>🪪 <span id="cmpModalId"></span></div>
+      <div>🤝 <span id="cmpModalRel"></span></div>
+      <div>🏥 <span id="cmpModalHosp"></span></div>
+      <div>👨‍⚕️ <span id="cmpModalDoc"></span></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="closeModal('cmpConfirmModal')" style="flex:1">❌ إلغاء</button>
+      <button class="btn btn-primary" id="cmpConfirmBtn" onclick="cmpConfirmReport();closeModal('cmpConfirmModal')" style="flex:2;background:linear-gradient(135deg,#0B7A6E,#12A090)">✅ تأكيد الإصدار</button>
     </div>
   </div>
 </div>
