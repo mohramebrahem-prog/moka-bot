@@ -4486,7 +4486,13 @@ function closeSuccess() {
   navigate('home');
 }
 function downloadSuccessReport() {
-  if(state.currentReportDetail)downloadReport(state.currentReportDetail);
+  const r = state.currentReportDetail;
+  if(!r) return;
+  if(API._token && r.id && typeof r.id==='number'){
+    openPdf(r.rnum);
+  } else {
+    downloadReport(r);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -5370,32 +5376,46 @@ function buildMockQR2(text,containerId) {
 }
 
 // ── تأكيد إصدار المشهد ──
-function mshConfirmReport() {
+async function mshConfirmReport() {
   if(state.balance<state.reportPrice){showToast('❌ رصيدك غير كافٍ');return;}
   const btn=document.getElementById('mshConfirmBtn');
   btn.innerHTML='<div class="spinner" style="border-top-color:white"></div>';btn.disabled=true;
-  setTimeout(()=>{
-    btn.innerHTML='✅ تأكيد';btn.disabled=false;
+  try {
     const pd=mshState._previewData||{};
-    const rnum=pd.rnum||mshState.pendingRnum;
-    state.balance-=state.reportPrice;
-    // إضافة للتقارير مع نوع visit
-    const newReport={
-      id:'msh'+Date.now(),rnum,
-      name:pd.name||'',pid:pd.id||'',nat:pd.nat||'',emp:pd.emp||'',
-      hosp:mshState.selectedHosp?.name||'',doc:mshState.selectedDoc?.name||'',
-      date:pd.admDate||'',days:1,reportType:'visit',
-      vtype:pd.vtype||'',admDate:pd.admDate||'',disDate:pd.disDate||''
+    const patientData={
+      name:pd.name||'', national_id:pd.id||'', nationality:pd.nat||'',
+      employer:pd.emp||'', visit_type:pd.vtype||'طوارئ',
+      adm_date:pd.admDate||'', adm_time:pd.admTime||'',
+      dis_date:pd.disDate||'', dis_time:pd.disTime||'',
     };
-    state.reports.unshift(newReport);
-    state.transactions.unshift({type:'debit',label:`مشهد مراجعة — ${pd.name||''}`,amount:-state.reportPrice,date:new Date().toISOString().split('T')[0]});
+    let rnum, newReport;
+    if(API._token && mshState.selectedHosp?.id && mshState.selectedDoc?.id){
+      const res = await API.createReport(mshState.selectedHosp.id, mshState.selectedDoc.id, 'visit', patientData);
+      rnum = res.rnum;
+      state.balance = res.new_balance ?? (state.balance - state.reportPrice);
+      newReport={id:res.report.id,rnum,name:pd.name||'',pid:pd.id||'',nat:pd.nat||'',
+        emp:pd.emp||'',hosp:mshState.selectedHosp?.name||'',doc:mshState.selectedDoc?.name||'',
+        date:pd.admDate||'',days:1,reportType:'visit'};
+      await apiRefreshReports(); await apiRefreshWallet();
+    } else {
+      rnum=pd.rnum||mshState.pendingRnum||'MSH-'+Date.now();
+      newReport={id:'msh'+Date.now(),rnum,name:pd.name||'',pid:pd.id||'',nat:pd.nat||'',
+        emp:pd.emp||'',hosp:mshState.selectedHosp?.name||'',doc:mshState.selectedDoc?.name||'',
+        date:pd.admDate||'',days:1,reportType:'visit'};
+      state.balance-=state.reportPrice;
+      state.reports.unshift(newReport);
+      state.transactions.unshift({type:'debit',label:`مشهد مراجعة — ${pd.name||''}`,amount:-state.reportPrice,date:new Date().toISOString().split('T')[0]});
+    }
     updateBalance();renderHomeRecent();renderReportsList('');renderTransactions();
     state.currentReportDetail=newReport;
     document.getElementById('successReportNum').textContent=rnum;
     document.getElementById('successOverlay').classList.add('show');
-    // إعادة تعيين الحالة
     mshState.pendingRnum=null;mshState._previewData=null;
-  },1400);
+  } catch(e){
+    showToast('❌ '+e.message);
+  } finally {
+    btn.innerHTML='✅ تأكيد';btn.disabled=false;
+  }
 }
 
 // ── Manual Doctor (مشهد) ──
@@ -5874,32 +5894,46 @@ function toggleCmpZoom() {
 }
 
 // ── تأكيد إصدار المرافقة ──
-function cmpConfirmReport() {
+async function cmpConfirmReport() {
   if(state.balance<state.reportPrice){showToast('❌ رصيدك غير كافٍ');return;}
   const btn=document.getElementById('cmpConfirmBtn');
   btn.innerHTML='<div class="spinner" style="border-top-color:white"></div>';btn.disabled=true;
-  setTimeout(()=>{
-    btn.innerHTML='✅ تأكيد';btn.disabled=false;
+  try {
     const pd=cmpState._previewData||{};
-    const rnum=pd.rnum||cmpState.pendingRnum||cmpGenRnum();
-    state.balance-=state.reportPrice;
-    // إضافة للتقارير
-    const newReport={
-      id:'cmp'+Date.now(),rnum,
-      name:pd.name||'',pid:pd.id||'',nat:pd.nat||'',emp:pd.emp||'',
-      hosp:cmpState.selectedHosp?.name||'',doc:cmpState.selectedDoc?.name||'',
-      date:pd.admDate||'',days:(pd.dur?.days||1),reportType:'companion',
-      relation:pd.rel||'',admDate:pd.admDate||'',disDate:pd.disDate||''
+    const patientData={
+      companion_name:pd.name||'', national_id:pd.id||'', nationality:pd.nat||'',
+      employer:pd.emp||'', relation:pd.rel||'',
+      adm_date:pd.admDate||'', dis_date:pd.disDate||'',
+      patient_name:pd.patName||'',
     };
-    state.reports.unshift(newReport);
-    state.transactions.unshift({type:'debit',label:`مرافقة مريض — ${pd.name||''}`,amount:-state.reportPrice,date:new Date().toISOString().split('T')[0]});
+    let rnum, newReport;
+    if(API._token && cmpState.selectedHosp?.id && cmpState.selectedDoc?.id){
+      const res = await API.createReport(cmpState.selectedHosp.id, cmpState.selectedDoc.id, 'companion', patientData);
+      rnum = res.rnum;
+      state.balance = res.new_balance ?? (state.balance - state.reportPrice);
+      newReport={id:res.report.id,rnum,name:pd.name||'',pid:pd.id||'',nat:pd.nat||'',
+        emp:pd.emp||'',hosp:cmpState.selectedHosp?.name||'',doc:cmpState.selectedDoc?.name||'',
+        date:pd.admDate||'',days:pd.dur?.days||1,reportType:'companion'};
+      await apiRefreshReports(); await apiRefreshWallet();
+    } else {
+      rnum=pd.rnum||cmpState.pendingRnum||cmpGenRnum();
+      newReport={id:'cmp'+Date.now(),rnum,name:pd.name||'',pid:pd.id||'',nat:pd.nat||'',
+        emp:pd.emp||'',hosp:cmpState.selectedHosp?.name||'',doc:cmpState.selectedDoc?.name||'',
+        date:pd.admDate||'',days:pd.dur?.days||1,reportType:'companion'};
+      state.balance-=state.reportPrice;
+      state.reports.unshift(newReport);
+      state.transactions.unshift({type:'debit',label:`مرافقة مريض — ${pd.name||''}`,amount:-state.reportPrice,date:new Date().toISOString().split('T')[0]});
+    }
     updateBalance();renderHomeRecent();renderReportsList('');renderTransactions();
     state.currentReportDetail=newReport;
     document.getElementById('successReportNum').textContent=rnum;
     document.getElementById('successOverlay').classList.add('show');
-    // إعادة تعيين الحالة
     cmpState.pendingRnum=null;cmpState._previewData=null;
-  },1400);
+  } catch(e){
+    showToast('❌ '+e.message);
+  } finally {
+    btn.innerHTML='✅ تأكيد';btn.disabled=false;
+  }
 }
 // ══════════════════════════════════════════════════════════════
 //  ADMIN — Mock Data & State

@@ -30,7 +30,9 @@ import io
 #  ⚙️ الإعدادات
 # ══════════════════════════════════════════════════════
 
-DB_PATH      = os.environ.get("DB_PATH", "seha.db")
+DB_PATH      = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "seha.db"))
+# إنشاء مجلد data إذا لم يكن موجوداً
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 SECRET_KEY   = os.environ.get("SECRET_KEY", "seha-secret-key-change-in-prod-2025")
 REPORT_PRICE = 10.0   # سعر التقرير الافتراضي بالريال
 
@@ -1096,32 +1098,78 @@ def download_report_pdf(rnum: str, user: dict = Depends(get_current_user)):
     r = dict(row)
     patient = json.loads(r.get("patient_data_json") or "{}")
 
-    pdf_data = {
-        "report_type":      r["report_type"],
-        "rnum":             rnum,
-        "hospital_name_ar": r.get("hospital_name_ar") or "",
-        "hospital_name_en": r.get("hospital_name_en") or "",
-        "hospital_city":    r.get("hospital_city") or "",
-        "hospital_type":    r.get("hospital_type") or "",
-        "hospital_license": r.get("hospital_license") or "",
-        "hospital_logo":    r.get("hospital_logo") or "",
-        "doctor_name_ar":   r.get("doctor_name_ar") or "",
-        "doctor_name_en":   r.get("doctor_name_en") or "",
-        "doctor_specialty": r.get("doctor_specialty") or "",
-        "doctor_license":   r.get("doctor_license") or "",
-        **patient,
+    # بناء المعاملات بالشكل الصحيح لـ generate_pdf
+    report_type = r["report_type"]
+    # normalize report_type
+    type_map = {"official": "report", "sick_leave": "report", "visit": "mashad", "companion": "companion"}
+    report_type = type_map.get(report_type, report_type)
+
+    hospital_data = {
+        "name_ar":       r.get("hospital_name_ar") or "",
+        "name_en":       r.get("hospital_name_en") or "",
+        "city":          r.get("hospital_city") or "",
+        "type":          r.get("hospital_type") or "",
+        "logo_b64":      r.get("hospital_logo") or "",
+        "is_government": 1 if r.get("hospital_type") in ("مستشفى", "مركز صحي") else 0,
     }
+
+    doctor_data = {
+        "name_ar":   r.get("doctor_name_ar") or "",
+        "name_en":   r.get("doctor_name_en") or "",
+        "specialty": r.get("doctor_specialty") or "",
+        "license_no": r.get("doctor_license") or "",
+    }
+
+    # تحويل أسماء الحقول من HTML إلى ما يتوقعه pdf_gen.py
+    def _norm_patient(p, rtype):
+        if rtype == "report":
+            return {
+                "full_name":   p.get("name") or p.get("full_name") or "",
+                "id_number":   p.get("national_id") or p.get("id_number") or "",
+                "nationality": p.get("nationality") or "",
+                "workplace":   p.get("employer") or p.get("workplace") or "",
+                "excuse_date": p.get("leave_from") or p.get("excuse_date") or "",
+                "days_count":  int(p.get("days") or p.get("days_count") or 1),
+                "diagnosis":   p.get("diagnosis") or "",
+            }
+        elif rtype == "mashad":
+            return {
+                "full_name":   p.get("name") or p.get("full_name") or "",
+                "id_number":   p.get("national_id") or p.get("id_number") or "",
+                "nationality": p.get("nationality") or "",
+                "workplace":   p.get("employer") or p.get("workplace") or "",
+                "visit_type":  p.get("visit_type") or "طوارئ",
+                "adm_date":    p.get("adm_date") or "",
+                "adm_time":    p.get("adm_time") or "",
+                "dis_date":    p.get("dis_date") or "",
+                "dis_time":    p.get("dis_time") or "",
+            }
+        else:  # companion
+            return {
+                "full_name":   p.get("companion_name") or p.get("name") or p.get("full_name") or "",
+                "id_number":   p.get("national_id") or p.get("id_number") or "",
+                "nationality": p.get("nationality") or "",
+                "workplace":   p.get("employer") or p.get("workplace") or "",
+                "relation":    p.get("relation") or "",
+                "adm_date":    p.get("adm_date") or "",
+                "dis_date":    p.get("dis_date") or "",
+                "patient_name": p.get("patient_name") or "",
+            }
+
+    patient_normalized = _norm_patient(patient, report_type)
 
     try:
         from pdf_generator import generate_pdf
-        from fastapi.responses import StreamingResponse
-        import io
-        pdf_bytes = generate_pdf(pdf_data)
+        pdf_bytes = generate_pdf(
+            report_type  = report_type,
+            patient_data = patient_normalized,
+            hospital_data= hospital_data,
+            doctor_data  = doctor_data,
+            rnum         = rnum,
+        )
     except Exception as e:
         raise HTTPException(500, f"خطأ في توليد PDF: {e}")
 
-    from fastapi.responses import StreamingResponse
-    import io
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
