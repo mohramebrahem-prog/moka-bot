@@ -1071,6 +1071,107 @@ def update_setting(key: str, data: SettingUpdate, admin: dict = Depends(require_
 #  📄 توليد PDF
 # ══════════════════════════════════════════════════════
 
+
+# ══════════════════════════════════════════════════════
+#  🖼️ معاينة التقرير كصورة (مثل البوت)
+# ══════════════════════════════════════════════════════
+
+@app.post("/reports/preview-image", tags=["Reports"])
+async def preview_report_image(
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user)
+):
+    """
+    يولّد PDF مؤقت من البيانات ويحوله لصورة JPEG للمعاينة.
+    نفس منطق _msh_create_preview_sync في البوت.
+    """
+    import tempfile, subprocess, base64
+    from io import BytesIO
+
+    report_type   = data.get("report_type", "report")
+    patient_data  = data.get("patient_data", {})
+    hospital_id   = data.get("hospital_id")
+    doctor_id     = data.get("doctor_id")
+
+    type_map = {"official": "report", "sick_leave": "report", "visit": "mashad", "companion": "companion"}
+    report_type = type_map.get(report_type, report_type)
+
+    # جلب بيانات المستشفى والطبيب
+    with db_ctx() as conn:
+        h = conn.execute("SELECT * FROM hospitals WHERE id=?", (hospital_id,)).fetchone() if hospital_id else None
+        d = conn.execute("SELECT * FROM doctors   WHERE id=?", (doctor_id,)).fetchone()   if doctor_id  else None
+
+    hospital_data = dict(h) if h else {"name_ar": "", "name_en": "", "city": "", "type": "", "logo_b64": "", "is_government": 0}
+    doctor_data   = dict(d) if d else {"name_ar": "", "name_en": "", "specialty": "", "license_no": ""}
+
+    def _norm(p, rt):
+        if rt == "report":
+            return {"full_name": p.get("name",""), "id_number": p.get("national_id",""),
+                    "nationality": p.get("nationality",""), "workplace": p.get("employer",""),
+                    "excuse_date": p.get("leave_from",""), "days_count": int(p.get("days",1))}
+        elif rt == "mashad":
+            return {"full_name": p.get("name",""), "id_number": p.get("national_id",""),
+                    "nationality": p.get("nationality",""), "workplace": p.get("employer",""),
+                    "visit_type": p.get("visit_type","طوارئ"), "adm_date": p.get("adm_date",""),
+                    "adm_time": p.get("adm_time",""), "dis_date": p.get("dis_date",""), "dis_time": p.get("dis_time","")}
+        else:
+            return {"full_name": p.get("companion_name", p.get("name","")), "id_number": p.get("national_id",""),
+                    "nationality": p.get("nationality",""), "workplace": p.get("employer",""),
+                    "relation": p.get("relation",""), "adm_date": p.get("adm_date",""), "dis_date": p.get("dis_date","")}
+
+    patient_norm = _norm(patient_data, report_type)
+
+    try:
+        from pdf_generator import generate_pdf
+        # توليد PDF مؤقت بـ PREVIEW كرقم
+        preview_patient = dict(patient_norm)
+        pdf_bytes = generate_pdf(
+            report_type   = report_type,
+            patient_data  = preview_patient,
+            hospital_data = hospital_data,
+            doctor_data   = doctor_data,
+            rnum          = "PREVIEW",
+        )
+
+        # حفظ PDF مؤقت
+        tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp_pdf.write(pdf_bytes)
+        tmp_pdf.close()
+        img_pfx = tmp_pdf.name.replace(".pdf", "_pg")
+
+        # PDF → صورة بـ pdftoppm
+        try:
+            subprocess.run(
+                ["pdftoppm", "-r", "72", "-png", "-l", "1", tmp_pdf.name, img_pfx],
+                capture_output=True, timeout=20
+            )
+        except FileNotFoundError:
+            pass  # pdftoppm غير متاح — نرجع PDF مباشرة
+
+        # ابحث عن الصورة
+        img_b64 = ""
+        for cand in [f"{img_pfx}-1.png", f"{img_pfx}-01.png"]:
+            if os.path.exists(cand):
+                from PIL import Image
+                img = Image.open(cand).convert("RGB")
+                buf = BytesIO()
+                img.save(buf, format="JPEG", quality=70)
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
+                os.unlink(cand)
+                break
+
+        os.unlink(tmp_pdf.name)
+
+        if img_b64:
+            return {"type": "image", "data": img_b64, "mime": "image/jpeg"}
+        else:
+            # fallback: ارجع PDF كـ base64
+            pdf_b64 = base64.b64encode(pdf_bytes).decode()
+            return {"type": "pdf", "data": pdf_b64, "mime": "application/pdf"}
+
+    except Exception as e:
+        raise HTTPException(500, f"خطأ في المعاينة: {e}")
+
 @app.get("/reports/{rnum}/pdf", tags=["Reports"])
 def download_report_pdf(rnum: str, user: dict = Depends(get_current_user)):
     """تحميل PDF التقرير"""
