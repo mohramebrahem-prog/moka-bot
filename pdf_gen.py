@@ -1,0 +1,1462 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+pdf_gen.py — توليد PDF إجازة مرضية
+إحداثيات مستخرجة بدقة من ملف صحة المرجعي (842 × 1190 pt)
+جميع القيم مُوسَّطة داخل خلاياها تمامًا
+"""
+
+import os
+import re
+import io
+import uuid
+import random
+import tempfile
+import json as _json
+import urllib.parse
+import base64
+import unicodedata
+from datetime import datetime, timedelta
+
+from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.utils import ImageReader
+
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+    _BIDI_OK = True
+except ImportError:
+    _BIDI_OK = False
+
+# مكتبة التحويل للتاريخ الهجري — محاولة تحميل مكتبة خارجية أولاً
+try:
+    from hijridate import Gregorian as _HijriGregorian
+    _HIJRI_LIB = 'hijridate'
+except ImportError:
+    try:
+        from hijri_converter import convert as _hc
+        _HijriGregorian = _hc.Gregorian
+        _HIJRI_LIB = 'hijri_converter'
+    except ImportError:
+        _HijriGregorian = None
+        _HIJRI_LIB = None
+
+# ══════════════════════════════════════════════════════════════
+# جدول تقويم أم القرى (1438-1460 هـ / 2017-2038 م)
+# مدمج مباشرةً — لا يحتاج أي مكتبة خارجية
+# كل صف: (Julian Day Number لأول الشهر، السنة الهجرية، الشهر)
+# ══════════════════════════════════════════════════════════════
+_UMM_ALQURA = [
+    (2457664,1438,1),(2457694,1438,2),(2457723,1438,3),(2457753,1438,4),
+    (2457783,1438,5),(2457813,1438,6),(2457842,1438,7),(2457871,1438,8),
+    (2457901,1438,9),(2457930,1438,10),(2457959,1438,11),(2457989,1438,12),
+    (2458018,1439,1),(2458048,1439,2),(2458077,1439,3),(2458107,1439,4),
+    (2458137,1439,5),(2458167,1439,6),(2458196,1439,7),(2458226,1439,8),
+    (2458255,1439,9),(2458285,1439,10),(2458314,1439,11),(2458343,1439,12),
+    (2458373,1440,1),(2458402,1440,2),(2458432,1440,3),(2458461,1440,4),
+    (2458491,1440,5),(2458521,1440,6),(2458551,1440,7),(2458580,1440,8),
+    (2458610,1440,9),(2458639,1440,10),(2458669,1440,11),(2458698,1440,12),
+    (2458727,1441,1),(2458757,1441,2),(2458786,1441,3),(2458816,1441,4),
+    (2458845,1441,5),(2458875,1441,6),(2458905,1441,7),(2458934,1441,8),
+    (2458964,1441,9),(2458994,1441,10),(2459023,1441,11),(2459053,1441,12),
+    (2459082,1442,1),(2459111,1442,2),(2459141,1442,3),(2459170,1442,4),
+    (2459200,1442,5),(2459229,1442,6),(2459259,1442,7),(2459288,1442,8),
+    (2459318,1442,9),(2459348,1442,10),(2459377,1442,11),(2459407,1442,12),
+    (2459436,1443,1),(2459466,1443,2),(2459495,1443,3),(2459525,1443,4),
+    (2459554,1443,5),(2459584,1443,6),(2459613,1443,7),(2459643,1443,8),
+    (2459672,1443,9),(2459702,1443,10),(2459731,1443,11),(2459761,1443,12),
+    (2459791,1444,1),(2459820,1444,2),(2459850,1444,3),(2459879,1444,4),
+    (2459909,1444,5),(2459939,1444,6),(2459968,1444,7),(2459997,1444,8),
+    (2460027,1444,9),(2460056,1444,10),(2460086,1444,11),(2460115,1444,12),
+    (2460145,1445,1),(2460174,1445,2),(2460204,1445,3),(2460234,1445,4),
+    (2460264,1445,5),(2460293,1445,6),(2460323,1445,7),(2460352,1445,8),
+    (2460381,1445,9),(2460411,1445,10),(2460440,1445,11),(2460469,1445,12),
+    (2460499,1446,1),(2460528,1446,2),(2460558,1446,3),(2460588,1446,4),
+    (2460618,1446,5),(2460647,1446,6),(2460677,1446,7),(2460707,1446,8),
+    (2460736,1446,9),(2460765,1446,10),(2460795,1446,11),(2460824,1446,12),
+    (2460853,1447,1),(2460883,1447,2),(2460912,1447,3),(2460942,1447,4),
+    (2460972,1447,5),(2461002,1447,6),(2461031,1447,7),(2461061,1447,8),
+    (2461090,1447,9),(2461120,1447,10),(2461149,1447,11),(2461179,1447,12),
+    (2461208,1448,1),(2461237,1448,2),(2461267,1448,3),(2461296,1448,4),
+    (2461326,1448,5),(2461356,1448,6),(2461385,1448,7),(2461415,1448,8),
+    (2461445,1448,9),(2461474,1448,10),(2461504,1448,11),(2461533,1448,12),
+    (2461563,1449,1),(2461592,1449,2),(2461621,1449,3),(2461651,1449,4),
+    (2461680,1449,5),(2461710,1449,6),(2461739,1449,7),(2461769,1449,8),
+    (2461799,1449,9),(2461828,1449,10),(2461858,1449,11),(2461888,1449,12),
+    (2461917,1450,1),(2461947,1450,2),(2461976,1450,3),(2462006,1450,4),
+    (2462035,1450,5),(2462064,1450,6),(2462094,1450,7),(2462123,1450,8),
+    (2462153,1450,9),(2462182,1450,10),(2462212,1450,11),(2462242,1450,12),
+    (2462271,1451,1),(2462301,1451,2),(2462331,1451,3),(2462360,1451,4),
+    (2462390,1451,5),(2462419,1451,6),(2462448,1451,7),(2462478,1451,8),
+    (2462507,1451,9),(2462537,1451,10),(2462566,1451,11),(2462596,1451,12),
+    (2462625,1452,1),(2462655,1452,2),(2462685,1452,3),(2462715,1452,4),
+    (2462744,1452,5),(2462774,1452,6),(2462803,1452,7),(2462832,1452,8),
+    (2462862,1452,9),(2462891,1452,10),(2462921,1452,11),(2462950,1452,12),
+    (2462980,1453,1),(2463009,1453,2),(2463039,1453,3),(2463069,1453,4),
+    (2463099,1453,5),(2463128,1453,6),(2463157,1453,7),(2463187,1453,8),
+    (2463216,1453,9),(2463246,1453,10),(2463275,1453,11),(2463305,1453,12),
+    (2463334,1454,1),(2463363,1454,2),(2463393,1454,3),(2463423,1454,4),
+    (2463453,1454,5),(2463482,1454,6),(2463512,1454,7),(2463541,1454,8),
+    (2463571,1454,9),(2463600,1454,10),(2463630,1454,11),(2463659,1454,12),
+    (2463689,1455,1),(2463718,1455,2),(2463747,1455,3),(2463777,1455,4),
+    (2463807,1455,5),(2463836,1455,6),(2463866,1455,7),(2463895,1455,8),
+    (2463925,1455,9),(2463955,1455,10),(2463984,1455,11),(2464014,1455,12),
+    (2464043,1456,1),(2464073,1456,2),(2464102,1456,3),(2464131,1456,4),
+    (2464161,1456,5),(2464190,1456,6),(2464220,1456,7),(2464249,1456,8),
+    (2464279,1456,9),(2464309,1456,10),(2464339,1456,11),(2464368,1456,12),
+    (2464398,1457,1),(2464427,1457,2),(2464457,1457,3),(2464486,1457,4),
+    (2464515,1457,5),(2464545,1457,6),(2464574,1457,7),(2464603,1457,8),
+    (2464633,1457,9),(2464663,1457,10),(2464692,1457,11),(2464722,1457,12),
+    (2464752,1458,1),(2464782,1458,2),(2464811,1458,3),(2464841,1458,4),
+    (2464870,1458,5),(2464899,1458,6),(2464929,1458,7),(2464958,1458,8),
+    (2464987,1458,9),(2465017,1458,10),(2465047,1458,11),(2465076,1458,12),
+    (2465106,1459,1),(2465136,1459,2),(2465166,1459,3),(2465195,1459,4),
+    (2465225,1459,5),(2465254,1459,6),(2465283,1459,7),(2465313,1459,8),
+    (2465342,1459,9),(2465371,1459,10),(2465401,1459,11),(2465431,1459,12),
+    (2465460,1460,1),(2465490,1460,2),(2465520,1460,3),(2465549,1460,4),
+    (2465579,1460,5),(2465608,1460,6),(2465638,1460,7),(2465667,1460,8),
+    (2465697,1460,9),(2465726,1460,10),(2465755,1460,11),(2465785,1460,12),
+]
+
+TEMP_DIR  = tempfile.gettempdir()
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# حرف LRM يمنع BiDi من عكس التواريخ داخل النص العربي
+_LRM = '\u200e'
+
+# ══════════════════════════════════════════════════════════════
+# 🎯  DRAW_SLOTS
+#     مصدر الإحداثيات: PyMuPDF على ملف صحة المرجعي 842×1190 pt
+#
+#  الحقول:
+#    x       — مركز النص أفقياً (ReportLab)
+#    rl_y    — مركز النص رأسياً  (ReportLab Bottom-Left)
+#    size    — حجم الخط (pt)
+#    color   — (R,G,B) قيم 0.0-1.0 — افتراضي أسود ناعم
+#    align   — 'center' | 'left' | 'right'
+# ══════════════════════════════════════════════════════════════
+DRAW_SLOTS = {
+
+    # ── 🔑 صفوف واسعة (قيمة مشتركة بلا عمود عربي منفصل) ─────
+    'leave_id':             {'x': 437.5, 'rl_y': 935.0, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},          # #2c3e77
+    'issue_date':           {'x': 437.5, 'rl_y': 765.7, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'national_id':          {'x': 437.5, 'rl_y': 679.1, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+
+    # ── 📅 صف مدة الإجازة — أبيض اللون ─────────────────────────
+    'leave_duration_en':    {'x': 318.3, 'rl_y': 891.7, 'size': 13.5,
+                             'color': (1.0, 1.0, 1.0)},             # أبيض
+    'leave_duration_ar':    {'x': 556.8, 'rl_y': 891.7, 'size': 13.5,
+                             'color': (1.0, 1.0, 1.0),
+                             'skip_arabic_processing': True},        # أبيض — النص جاهز بصرياً، لا bidi
+
+    # ── صفوف عادية: عمود إنجليزي ─────────────────────────────
+    'admission_date_en':    {'x': 318.3, 'rl_y': 849.7, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'discharge_date_en':    {'x': 318.3, 'rl_y': 807.7, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'name_en':              {'x': 318.3, 'rl_y': 721.5, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'nationality_en':       {'x': 318.3, 'rl_y': 637.1, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'practitioner_name_en': {'x': 318.3, 'rl_y': 550.9, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'position_en':          {'x': 318.3, 'rl_y': 507.6, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+
+    # ── صفوف عادية: عمود عربي ────────────────────────────────
+    'admission_date_ar':    {'x': 556.8, 'rl_y': 849.7, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'discharge_date_ar':    {'x': 556.8, 'rl_y': 807.7, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'name_ar':              {'x': 556.8, 'rl_y': 721.5, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'nationality_ar':       {'x': 556.8, 'rl_y': 637.1, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'employer_ar':          {'x': 556.8, 'rl_y': 595.1, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'practitioner_name_ar': {'x': 556.8, 'rl_y': 550.9, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+    'position_ar':          {'x': 556.8, 'rl_y': 507.6, 'size': 13.5,
+                             'color': (0.17255, 0.24314, 0.46667)},
+
+    # ── 🏥 قسم المستشفى (أسفل الشعار — مُوسَّط على cx=632) ─────────
+    # bold=True → اسم المستشفى عريض
+    'hospital_name_ar':     {'x': 632.0, 'rl_y': 338.0, 'size': 13.5,
+                             'color': (0.0, 0.0, 0.0), 'bold': True},
+    'hospital_name_en':     {'x': 632.0, 'rl_y': 316.0, 'size': 13.5,
+                             'color': (0.0, 0.0, 0.0), 'bold': True},
+
+    # رقم الترخيص — يظهر للمستشفيات الخاصة فقط (تحت اسم المستشفى الإنجليزي)
+    'license_number':        {'x': 632.0, 'rl_y': 294.0, 'size': 11.0,
+                              'color': (0.0, 0.0, 0.0), 'bold': False},
+
+    # ── 🕐 الوقت والتاريخ (يسار أسفل الصفحة) محاذاة يسار ────────
+    'issue_time':           {'x': 38.0,  'rl_y': 229.1, 'size': 12.8,
+                             'color': (0.0, 0.0, 0.0), 'align': 'left', 'bold': False},
+    'issue_weekday_date':   {'x': 38.0,  'rl_y': 201.7, 'size': 12.8,
+                             'color': (0.0, 0.0, 0.0), 'align': 'left', 'bold': False},
+}
+
+# ── شعار المستشفى (إحداثيات ReportLab) ─────────────────────────
+# الجدول ينتهي عند RL ≈ 488 (صف Position)
+# الشعار يجب أن يكون تحت الجدول: rl_y + height < 488
+#   rl_y=360  →  أعلى الشعار = 360+110 = 470  (تحت الجدول بهامش 18pt)
+QR_SLOT = {
+    'x':      172.2,   # x0 مطابق للمرجع
+    'rl_y':   368.0,   # رُفع قليلاً للأعلى عن الموضع الأصلي 359.6
+    'width':  108.2,   # عرض مطابق للمرجع
+    'height': 101.6,   # ارتفاع مطابق للمرجع
+}
+
+# ── شعار المستشفى (إحداثيات ReportLab) ─────────────────────────
+# الحجم مطابق تماماً لحجم الباركود QR_SLOT (width=108.2, height=101.6)
+LOGO_SLOT = {
+    'x':      577.3,    # يسار الشعار — مطابق للمرجع (x0=577.3)
+    'rl_y':   360.2,    # أسفل الشعار (RL) — مُعدَّل ليتمركز مع الباركود
+    'width':  108.2,    # نفس عرض الباركود QR_SLOT
+    'height': 101.6,    # نفس ارتفاع الباركود QR_SLOT
+}
+
+
+# ══════════════════════════════════════════════════════════════
+# تسجيل الخطوط — Times New Roman فقط
+# ══════════════════════════════════════════════════════════════
+_fonts_registered = False
+_times_ok         = False   # Times New Roman TTF محمل
+_noto_ok          = False   # NotoSansArabic TTF محمل
+_open_sans_ok     = False   # Open Sans TTF محمل
+
+# مسارات بحث ملف times.ttf — للنصوص الإنجليزية العادية
+_TIMES_PATHS = [
+    os.path.join(_BASE_DIR, 'fonts', 'times.ttf'),
+    os.path.join(_BASE_DIR, 'times.ttf'),
+    '/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+    '/Library/Fonts/Times New Roman.ttf',
+    'C:/Windows/Fonts/times.ttf',
+]
+
+# مسارات بحث ملف timesbd.ttf — للنصوص الإنجليزية العريضة
+_TIMES_BOLD_PATHS = [
+    os.path.join(_BASE_DIR, 'fonts', 'timesbd.ttf'),
+    os.path.join(_BASE_DIR, 'timesbd.ttf'),
+    '/usr/share/fonts/truetype/msttcorefonts/Times_New_Roman_Bold.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf',
+    '/Library/Fonts/Times New Roman Bold.ttf',
+    'C:/Windows/Fonts/timesbd.ttf',
+]
+
+# مسارات بحث NotoSansArabic — للنصوص العربية
+_NOTO_REG_PATHS = [
+    os.path.join(_BASE_DIR, 'NotoSansArabic-Regular.ttf'),
+    os.path.join(_BASE_DIR, 'fonts', 'NotoSansArabic-Regular.ttf'),
+]
+_NOTO_BOLD_PATHS = [
+    os.path.join(_BASE_DIR, 'NotoSansArabic-Bold.ttf'),
+    os.path.join(_BASE_DIR, 'fonts', 'NotoSansArabic-Bold.ttf'),
+]
+
+
+# مسارات بحث Open Sans — لرقم الترخيص
+_OPEN_SANS_REG_PATHS = [
+    os.path.join(_BASE_DIR, 'OpenSans-Regular.ttf'),
+    os.path.join(_BASE_DIR, 'fonts', 'OpenSans-Regular.ttf'),
+]
+_OPEN_SANS_BOLD_PATHS = [
+    os.path.join(_BASE_DIR, 'OpenSans-Bold.ttf'),
+    os.path.join(_BASE_DIR, 'fonts', 'OpenSans-Bold.ttf'),
+]
+
+
+def _register_fonts():
+    global _fonts_registered, _times_ok, _noto_ok, _open_sans_ok
+    if _fonts_registered:
+        return
+
+    # تسجيل Times New Roman Regular (للنصوص الإنجليزية)
+    for path in _TIMES_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('TimesNewRoman', path))
+                _times_ok = True
+                break
+            except Exception:
+                pass
+
+    # تسجيل Times New Roman Bold (للنصوص الإنجليزية العريضة)
+    _times_bold_ok = False
+    for path in _TIMES_BOLD_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('TimesNewRoman-Bold', path))
+                _times_bold_ok = True
+                break
+            except Exception:
+                pass
+    # إن لم يوجد bold منفصل → استخدم Regular كـ Bold
+    if not _times_bold_ok and _times_ok:
+        for path in _TIMES_PATHS:
+            if os.path.exists(path):
+                try:
+                    pdfmetrics.registerFont(TTFont('TimesNewRoman-Bold', path))
+                    break
+                except Exception:
+                    pass
+
+    # تسجيل NotoSansArabic (للنصوص العربية) — الأولوية الأولى
+    _noto_reg_loaded = False
+    _noto_bold_loaded = False
+    for path in _NOTO_REG_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('NotoSansArabic', path))
+                _noto_reg_loaded = True
+                break
+            except Exception:
+                pass
+    for path in _NOTO_BOLD_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('NotoSansArabic-Bold', path))
+                _noto_bold_loaded = True
+                break
+            except Exception:
+                pass
+    _noto_ok = _noto_reg_loaded
+
+    # تسجيل Open Sans (لرقم الترخيص)
+    for path in _OPEN_SANS_REG_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('OpenSans', path))
+                _open_sans_ok = True
+                break
+            except Exception:
+                pass
+    for path in _OPEN_SANS_BOLD_PATHS:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('OpenSans-Bold', path))
+            except Exception:
+                pass
+
+    _fonts_registered = True
+
+
+# ══════════════════════════════════════════════════════════════
+# دوال مساعدة
+# ══════════════════════════════════════════════════════════════
+
+def shape_arabic(text):
+    if not text:
+        return ""
+    text = str(text)
+    if not any('\u0600' <= c <= '\u06FF' for c in text):
+        return text
+    if _BIDI_OK:
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            pass
+    return text
+
+
+def _has_arabic(text):
+    return any('\u0600' <= c <= '\u06FF' for c in str(text))
+
+
+def en_only(t):
+    r = ''.join(ch for ch in str(t) if not ('\u0600' <= ch <= '\u06FF')).strip()
+    return "" if (not r or re.fullmatch(r'[^\w]+', r)) else r
+
+
+def _clean(t):
+    if not t:
+        return t
+    return re.sub(r'\s*\([^)]*\)\s*', '', str(t)).strip()
+
+
+def safe_int(v, d=1):
+    try:
+        return int(v)
+    except Exception:
+        m = re.search(r'\d+', str(v))
+        return int(m.group()) if m else d
+
+
+# ══════════════════════════════════════════════════════════════
+# تحويل الأرقام العربية/الفارسية إلى أرقام غربية (إنجليزية)
+# Arabic-Indic & Extended Arabic-Indic → Western digits
+# ══════════════════════════════════════════════════════════════
+_AR_DIGITS = str.maketrans(
+    '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹',
+    '01234567890123456789'
+)
+
+def to_western_nums(text):
+    """
+    يحوّل الأرقام العربية-الهندية (٠-٩) والفارسية (۰-۹)
+    إلى أرقام غربية (0-9) في أي نص.
+    """
+    if not text:
+        return text
+    return str(text).translate(_AR_DIGITS)
+
+
+# ── أسماء الأشهر الميلادية بالعربي (لتحليل مدخلات المستخدم) ──────────
+_GREGORIAN_MONTHS_AR = {
+    'يناير': 1,   'جانفي': 1,
+    'فبراير': 2,  'فيفري': 2,   'شباط': 2,
+    'مارس': 3,    'آذار': 3,
+    'ابريل': 4,   'أبريل': 4,   'نيسان': 4,   'إبريل': 4,
+    'مايو': 5,    'مايس': 5,    'ايار': 5,
+    'يونيو': 6,   'يونيه': 6,   'حزيران': 6,
+    'يوليو': 7,   'يوليه': 7,   'تموز': 7,
+    'اغسطس': 8,   'أغسطس': 8,   'اوغسطس': 8,  'آب': 8,
+    'سبتمبر': 9,  'ايلول': 9,   'أيلول': 9,
+    'اكتوبر': 10, 'أكتوبر': 10, 'تشرين': 10,
+    'نوفمبر': 11, 'نوفيمبر': 11,'تشرين الثاني': 11,
+    'ديسمبر': 12, 'ديسمبير': 12,'كانون': 12,   'كانون الأول': 12,
+}
+
+# ترتيب من الأطول للأقصر لضمان المطابقة الصحيحة
+_GREG_MONTHS_SORTED = sorted(_GREGORIAN_MONTHS_AR.items(), key=lambda x: -len(x[0]))
+
+
+def _parse_ar_gregorian(text: str, default_year: int = None) -> str:
+    """
+    يحلّل تاريخاً ميلادياً مكتوباً بالأشهر العربية ويُعيده بصيغة DD/MM/YYYY.
+    أمثلة:
+      "9 ابريل"      → "09/04/2026"  (يفترض السنة الحالية)
+      "٩ ابريل"      → "09/04/2026"
+      "9 ابريل 2026" → "09/04/2026"
+    يُعيد None إن لم يُعرف.
+    """
+    if not text:
+        return None
+    t = str(text).translate(_AR_DIGITS).strip()
+    if default_year is None:
+        default_year = datetime.now().year
+
+    for month_ar, month_num in _GREG_MONTHS_SORTED:
+        escaped = re.escape(month_ar)
+        m = re.search(rf'(\d{{1,2}})\s+{escaped}\s*(\d{{4}})?', t, re.UNICODE)
+        if m:
+            day  = int(m.group(1))
+            year = int(m.group(2)) if m.group(2) else default_year
+            try:
+                dt = datetime(year, month_num, day)
+                return dt.strftime("%d/%m/%Y")
+            except ValueError:
+                return None
+    return None
+
+
+def calc_dates(s, days, ex=None):
+    def _try_parse(val):
+        """يحاول تحليل التاريخ بأي صيغة مدعومة — يُعيد datetime أو None"""
+        if not val:
+            return None
+        v = str(val).strip()
+        # ١) صيغ الأرقام المعروفة
+        for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y", "%Y/%m/%d"]:
+            try:
+                return datetime.strptime(v, fmt)
+            except Exception:
+                pass
+        # ٢) أشهر ميلادية بالعربي (مثل "9 ابريل" أو "٩ ابريل 2026")
+        ar_greg = _parse_ar_gregorian(v)
+        if ar_greg:
+            try:
+                return datetime.strptime(ar_greg, "%d/%m/%Y")
+            except Exception:
+                pass
+        return None
+
+    d = _try_parse(s)
+    if d:
+        st = d.strftime("%d-%m-%Y")
+        en = (d + timedelta(days=days - 1)).strftime("%d-%m-%Y")
+        if ex:
+            exc = _clean(ex)
+            dex = _try_parse(exc)
+            ex = dex.strftime("%d-%m-%Y") if dex else ex
+        return st, en, ex or st
+    return s, s, ex or s
+
+
+def _g2jdn(year, month, day):
+    """Gregorian → Julian Day Number"""
+    a = (14 - month) // 12
+    y = year + 4800 - a
+    m = month + 12 * a - 3
+    return day + (153*m+2)//5 + 365*y + y//4 - y//100 + y//400 - 32045
+
+
+def _jdn2hijri_builtin(jdn):
+    """
+    Julian Day Number → (h_year, h_month, h_day)
+    يستخدم جدول أم القرى المدمج مباشرةً.
+    يغطي 1438-1460 هـ (2017-2038 م).
+    """
+    # بحث ثنائي عن الشهر الهجري
+    lo, hi = 0, len(_UMM_ALQURA) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _UMM_ALQURA[mid][0] <= jdn:
+            lo = mid
+        else:
+            hi = mid - 1
+    month_jdn, h_year, h_month = _UMM_ALQURA[lo]
+    h_day = jdn - month_jdn + 1
+    return h_year, h_month, h_day
+
+
+def _jdn2hijri_lib(year, month, day):
+    """التحويل باستخدام مكتبة خارجية إن كانت متاحة"""
+    if _HijriGregorian is not None:
+        try:
+            h = _HijriGregorian(year, month, day).to_hijri()
+            return h.year, h.month, h.day
+        except Exception:
+            pass
+    return None
+
+
+def to_hijri(date_str):
+    """
+    يحوّل تاريخاً ميلادياً إلى هجري (DD-MM-YYYY).
+    يقبل صيغ متعددة بما فيها الأشهر الميلادية بالعربي مثل "9 ابريل".
+    يستخدم جدول أم القرى المدمج — لا يحتاج أي مكتبة خارجية.
+    """
+    if not date_str:
+        return date_str
+
+    # تطبيع الأرقام أولاً
+    normalized = str(date_str).translate(_AR_DIGITS).strip()
+
+    # محاولة تحليل الصيغ المعروفة
+    for fmt in ["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y", "%Y/%m/%d"]:
+        try:
+            dt = datetime.strptime(normalized, fmt)
+            y, m, d = dt.year, dt.month, dt.day
+            lib_result = _jdn2hijri_lib(y, m, d)
+            if lib_result:
+                hy, hm, hd = lib_result
+                return f"{hd:02d}-{hm:02d}-{hy}"
+            jdn = _g2jdn(y, m, d)
+            hy, hm, hd = _jdn2hijri_builtin(jdn)
+            return f"{hd:02d}-{hm:02d}-{hy}"
+        except Exception:
+            pass
+
+    # محاولة تحليل أشهر ميلادية بالعربي (مثل "9 ابريل" أو "9 ابريل 2026")
+    ar_greg = _parse_ar_gregorian(normalized)
+    if ar_greg:
+        return to_hijri(ar_greg)
+
+    return date_str   # fallback: أعد كما هو
+
+
+def to_hijri_duration(days, h_start, h_end):
+    """
+    يُنتج نص مدة الإجازة بالهجري.
+    يُعالَج بـ shape_arabic مثل باقي النصوص العربية في الجدول.
+    h_start, h_end: تواريخ هجرية جاهزة.
+    """
+    _dwe_ar = "يوم" if days == 1 else "أيام"
+    # بعد عكس الترتيب في الرسم: h_end يصبح يساراً و h_start يميناً
+    # فنكتب h_end أولاً ليظهر h_start على اليمين بعد العكس
+    return f"{days} {_dwe_ar} ( {h_end} الى {h_start} )"
+
+
+def _jdn_to_gregorian(jdn: int) -> datetime:
+    """Julian Day Number → Gregorian datetime"""
+    l = jdn + 68569
+    n = (4 * l) // 146097
+    l = l - (146097 * n + 3) // 4
+    i = (4000 * (l + 1)) // 1461001
+    l = l - (1461 * i) // 4 + 31
+    j = (80 * l) // 2447
+    day = l - (2447 * j) // 80
+    ll = j // 11
+    month = j + 2 - 12 * ll
+    year = 100 * (n - 49) + i + ll
+    return datetime(year, month, day)
+
+
+def hijri_to_gregorian(h_year: int, h_month: int, h_day: int):
+    """
+    يحوّل تاريخ هجري (أم القرى) إلى ميلادي.
+    يُعيد datetime أو None إن كان خارج الجدول.
+    """
+    for jdn_start, hy, hm in _UMM_ALQURA:
+        if hy == h_year and hm == h_month:
+            return _jdn_to_gregorian(jdn_start + h_day - 1)
+    return None
+
+
+# ── أسماء الأشهر الهجرية بالعربي ──────────────────────────────────
+HIJRI_MONTHS_AR = {
+    'محرم': 1,
+    'صفر': 2,
+    'ربيع الأول': 3, 'ربيع الاول': 3, 'ربيع أول': 3,
+    'ربيع الثاني': 4, 'ربيع الاخر': 4, 'ربيع ثاني': 4,
+    'جمادى الأولى': 5, 'جمادى الاولى': 5, 'جمادى أولى': 5,
+    'جمادى الثانية': 6, 'جمادى الثاني': 6, 'جمادى ثانية': 6,
+    'رجب': 7,
+    'شعبان': 8,
+    'رمضان': 9,
+    'شوال': 10,
+    'ذو القعدة': 11, 'ذي القعدة': 11, 'ذو القعده': 11,
+    'ذو الحجة': 12, 'ذي الحجة': 12, 'ذو الحجه': 12,
+}
+
+# ترتيب الأشهر من الأطول للأقصر لضمان أولوية المطابقة الصحيحة
+_HIJRI_MONTHS_SORTED = sorted(HIJRI_MONTHS_AR.items(), key=lambda x: -len(x[0]))
+
+_AR_DIGITS_PDF = str.maketrans(
+    '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹',
+    '01234567890123456789'
+)
+
+
+def parse_hijri_date_input(text: str, default_year: int = 1447) -> str:
+    """
+    يحلّل تاريخ هجري مكتوب بالعربي ويُعيده بصيغة ميلادية (DD/MM/YYYY).
+    أمثلة مقبولة:
+      "١٠ رمضان"        → يفترض السنة default_year
+      "١٠ رمضان ١٤٤٧"  → سنة صريحة
+      "10 رمضان 1447"   → أرقام غربية
+    يُعيد None إن لم يُعرف.
+    """
+    if not text:
+        return None
+    t = str(text).translate(_AR_DIGITS_PDF).strip()
+    # إزالة الفواصل والنقاط
+    t = re.sub(r'[,،.]', ' ', t)
+    for month_ar, month_num in _HIJRI_MONTHS_SORTED:
+        escaped = re.escape(month_ar.translate(_AR_DIGITS_PDF))
+        pattern = rf'(\d{{1,2}})\s+{escaped}\s*(\d{{4}})?'
+        m = re.search(pattern, t, re.UNICODE)
+        if m:
+            day  = int(m.group(1))
+            year = int(m.group(2)) if m.group(2) else default_year
+            dt = hijri_to_gregorian(year, month_num, day)
+            if dt:
+                return dt.strftime("%d/%m/%Y")
+    return None
+
+
+def gen_leave_id(_):
+    return "PSL" + "".join([str(random.randint(0, 9)) for _ in range(11)])
+
+
+def gen_license_number():
+    """رقم ترخيص عشوائي مكوّن من 16 رقماً غربياً"""
+    return "".join([str(random.randint(0, 9)) for _ in range(16)])
+
+
+def is_private_hospital(hospital_name):
+    """
+    يتحقق إن كان المستشفى خاصاً بمطابقته مع قائمة المستشفيات الخاصة في KSA_HOSPITALS.
+    يُعيد True للخاص، False للحكومي والمجمعات.
+    """
+    if not hospital_name:
+        return False
+    try:
+        from hospitals_data import KSA_HOSPITALS
+        import unicodedata
+        # تطبيع النص: إزالة الفراغات الزائدة وتوحيد الترميز
+        def _norm(t):
+            t = unicodedata.normalize('NFC', str(t))
+            return ' '.join(t.split())  # يزيل أي فراغات متعددة أو خاصة
+        name_norm = _norm(hospital_name)
+        for city_data in KSA_HOSPITALS.values():
+            for h in city_data.get('خاص', []):
+                h_norm = _norm(h)
+                if h_norm == name_norm or name_norm in h_norm or h_norm in name_norm:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def format_weekday_date(dt=None):
+    """
+    يُنتج نص التاريخ بصيغة:
+      Thursday, 26 March 2026
+    الأيام والأشهر بالإنجليزية، الأرقام غربية
+    """
+    if dt is None:
+        dt = datetime.now()
+    return dt.strftime("%A, %d %B %Y")
+
+
+# ══════════════════════════════════════════════════════════════
+# خرائط الترجمة
+# ══════════════════════════════════════════════════════════════
+
+_NAT_MAP = {
+    "سعودي": "Saudi Arabia",    "سعودية": "Saudi Arabia",
+    "سعوديه": "Saudi Arabia",
+    "يمني":  "Yemeni",          "مصري":   "Egyptian",
+    "سوداني":"Sudanese",        "اردني":  "Jordanian",
+    "سوري":  "Syrian",          "لبناني": "Lebanese",
+    "عراقي": "Iraqi",           "كويتي":  "Kuwaiti",
+    "اماراتي":"Emirati",        "قطري":   "Qatari",
+    "بحريني":"Bahraini",        "عماني":  "Omani",
+    "باكستاني":"Pakistani",     "هندي":   "Indian",
+    "فلبيني":"Filipino",        "اندونيسي":"Indonesian",
+    "بنغلاديشي":"Bangladeshi",  "مغربي":  "Moroccan",
+    "تونسي": "Tunisian",        "جزائري": "Algerian",
+    "ليبي":  "Libyan",          "صومالي": "Somali",
+    "سريلانكي":"Sri Lankan",    "افغاني": "Afghan",
+    "ايراني":"Iranian",         "تركي":   "Turkish",
+    "امريكي":"American",        "بريطاني":"British",
+}
+
+# تصحيح إملاء الجنسية العربية لتطابق المرجع
+_NAT_AR_FIX = {
+    "سعودي":  "السعودية",
+    "سعودية": "السعودية",
+    "سعوديه": "السعودية",
+    "يمني":   "اليمنية",
+    "مصري":   "المصرية",
+    "سوداني": "السودانية",
+    "اردني":  "الأردنية",
+    "سوري":   "السورية",
+    "لبناني": "اللبنانية",
+    "عراقي":  "العراقية",
+    "كويتي":  "الكويتية",
+    "اماراتي":"الإماراتية",
+    "قطري":   "القطرية",
+    "بحريني": "البحرينية",
+    "عماني":  "العُمانية",
+    "باكستاني":"الباكستانية",
+    "هندي":   "الهندية",
+}
+
+def normalize_nat_ar(text):
+    """تصحيح إملاء الجنسية العربية"""
+    t = str(text).strip()
+    for ar, fixed in _NAT_AR_FIX.items():
+        if ar in t:
+            return fixed
+    return t
+
+_TITLE_MAP = {
+    "دكتور":"Doctor",            "دكتورة":"Doctor",
+    "طبيب":"Physician",          "طبيبة":"Physician",
+    "استشاري":"Consultant",      "استشارية":"Consultant",
+    "أخصائي":"Specialist",       "أخصائية":"Specialist",
+    "اخصائي":"Specialist",       "اخصائية":"Specialist",
+    "ممارس عام":"General Practitioner",
+    "طب عام":"General Medicine", "جراح":"Surgeon",
+    "طب الطوارئ":"Emergency Medicine","طوارئ":"Emergency",
+    "باطنية":"Internal Medicine","باطنة":"Internal Medicine",
+    "طب الأطفال":"Pediatrics",   "أطفال":"Pediatrics",
+    "اطفال":"Pediatrics",
+    "نساء وولادة":"Obstetrics & Gynecology","نساء":"Gynecology",
+    "عظام":"Orthopedics",        "عيون":"Ophthalmology",
+    "أنف وأذن وحنجرة":"ENT",    "جلدية":"Dermatology",
+    "قلب":"Cardiology",          "مخ وأعصاب":"Neurology",
+    "نفسية":"Psychiatry",        "أسنان":"Dentistry",
+    "عيادة عامة":"General Clinic","رعاية أولية":"Primary Care",
+    "صيدلة":"Pharmacy",          "صيدلي":"Pharmacist",
+    "تمريض":"Nursing",           "ممرض":"Nurse",
+    "ممرضة":"Nurse",
+    "فيزيوثيرابي":"Physiotherapy","أشعة":"Radiology",
+    "استشاري أول":"Senior Consultant",
+    "رئيس قسم":"Department Head",
+    "مدير":"Director",           "مدير طبي":"Medical Director",
+    "طبيب أسنان عام":"General Dentist",
+    "طب الأسنان":"Dentistry",
+}
+
+_TRANS_CACHE = {}
+
+
+def nat_en(t):
+    t = str(t).strip()
+    for ar, en in _NAT_MAP.items():
+        if ar in t:
+            return en
+    r = en_only(t)
+    return r if r else t
+
+
+def _lookup_title(text):
+    t = str(text).strip()
+    if t in _TITLE_MAP:
+        return _TITLE_MAP[t]
+    for ar, en in _TITLE_MAP.items():
+        if ar in t:
+            return en
+    return None
+
+
+def _to_ascii(text):
+    """تحويل أحرف Unicode الخاصة (Ā Ḥ Ḍ…) إلى ASCII لتجنب مربعات Times-Roman"""
+    if not text:
+        return ""
+    normalized = unicodedata.normalize('NFKD', str(text))
+    ascii_text = normalized.encode('ascii', 'ignore').decode('ascii')
+    return ascii_text.strip() or str(text).strip()
+
+
+def _translate_name_pdf(text: str) -> str:
+    """
+    ترجمة الأسماء — نفس مسار utils.py:
+    1) arabic_transliterate (نظام الجوازات السعودية)
+    2) Google Translate عبر deep_translator
+    3) fallback: النص كما هو
+    """
+    if not text or not text.strip():
+        return ""
+    text = text.strip()
+    if not any('\u0600' <= c <= '\u06FF' for c in text):
+        return text
+
+    # تحقق من الكاش
+    if text in _TRANS_CACHE:
+        return _TRANS_CACHE[text]
+
+    # ── 1) arabic_transliterate (نظام الجوازات) ──
+    try:
+        from arabic_transliterate import transliterate_name as _tname
+        result = _tname(text)
+        if result and result.upper() != text.upper():
+            result = _to_ascii(result.strip())
+            _TRANS_CACHE[text] = result
+            return result
+    except Exception:
+        pass
+
+    # ── 2) Google Translate ──
+    try:
+        from deep_translator import GoogleTranslator
+        result = (GoogleTranslator(source="ar", target="en").translate(text) or "").strip()
+        if result:
+            result = _to_ascii(result)
+            _TRANS_CACHE[text] = result
+            return result
+    except Exception:
+        pass
+
+    # ── 3) fallback ──
+    return text
+
+
+def _to_en(text):
+    """ترجمة نص عربي → إنجليزي مع أولوية قاموس المسميات الطبية"""
+    if not text:
+        return ""
+    if not _has_arabic(text):
+        return _to_ascii(str(text).strip())
+    # قاموس المسميات الطبية أولاً
+    found = _lookup_title(text)
+    if found:
+        return _to_ascii(found.strip())
+    # ثم الترجمة عبر arabic_transliterate → Google
+    result = _translate_name_pdf(text)
+    if result and not _has_arabic(result):
+        return _to_ascii(result.strip())
+    return _to_ascii(str(text).strip())
+
+
+# ══════════════════════════════════════════════════════════════
+# QR Code
+# ══════════════════════════════════════════════════════════════
+
+def make_qr_image(url):
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=2, box_size=6, border=1,
+                           error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(url)
+        qr.make(fit=True)
+        return qr.make_image(fill_color="black", back_color="white")
+    except Exception:
+        return None
+
+
+def make_qr_base64(url):
+    img = make_qr_image(url)
+    if not img:
+        return None
+    try:
+        buf = io.BytesIO()
+        img.save(buf, 'PNG')
+        buf.seek(0)
+        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
+    except Exception:
+        return None
+
+
+def logo_to_base64(logo_path):
+    if not logo_path or not os.path.exists(logo_path):
+        return None
+    try:
+        with open(logo_path, 'rb') as f:
+            data = f.read()
+        ext = os.path.splitext(logo_path)[1].lower().lstrip('.')
+        if ext == 'jpg':
+            ext = 'jpeg'
+        return f"data:image/{ext};base64,{base64.b64encode(data).decode()}"
+    except Exception:
+        return None
+
+
+# ══════════════════════════════════════════════════════════════
+# أبعاد القالب
+# ══════════════════════════════════════════════════════════════
+
+def _get_page_size(template_path):
+    reader = PdfReader(template_path)
+    box    = reader.pages[0].mediabox
+    return float(box.width), float(box.height)
+
+
+# ══════════════════════════════════════════════════════════════
+# إنشاء طبقة النصوص والصور
+# ══════════════════════════════════════════════════════════════
+
+def _create_overlay(page_w, page_h, field_values, qr_img, logo_path, overlay_path, website_url="https://sehaseinquiresslendquiry.com"):
+    """
+    طبقة شفافة تُرسم فوق القالب:
+    • نصوص إنجليزية → Times-Roman / Times-Bold  (مدمج في ReportLab)
+    • جميع النصوص (عربي + إنجليزي + أرقام) → Times New Roman
+    • الخط العريض   → للمستشفى + الوقت + التاريخ + رقم الترخيص
+    """
+    _register_fonts()
+    c = rl_canvas.Canvas(overlay_path, pagesize=(page_w, page_h))
+
+    # ── اختيار الخطوط حسب ما هو متاح ───────────────────────────
+    # ── NotoSansArabic للنصوص العربية، Times New Roman للإنجليزية ──
+    FONT_AR_REG  = 'NotoSansArabic'      if _noto_ok else 'Times-Roman'
+    FONT_AR_BOLD = 'NotoSansArabic-Bold' if _noto_ok else 'Times-Bold'
+    FONT_REG     = 'Times-Roman'
+    FONT_BOLD    = 'Times-Bold'
+
+    # معامل تحجيم تلقائي للقوالب بأبعاد مختلفة عن 842×1190
+    x_scale = page_w / 842.0
+    y_scale = page_h / 1190.0
+
+    # عرض الخلية التقريبي لكل حقل (لضبط حجم الخط تلقائياً)
+    # القيم مستخرجة من قالب صحة الرسمي
+    MAX_WIDTHS = {
+        'name_en':              230,
+        'name_ar':               230,
+        'practitioner_name_en':  230,
+        'practitioner_name_ar':  230,
+        'employer_ar':           230,
+        'nationality_en':        230,
+        'nationality_ar':        230,
+        'position_en':           230,
+        'position_ar':           230,
+        # hospital_name_en و hospital_name_ar محذوفان — يمتدان بلا قيود
+    }
+
+    def _fit_font_size(text, font, base_size, max_width):
+        """الحجم ثابت دائماً — لا تقليص أبداً"""
+        return base_size
+
+    def _draw_fixed_two_lines(canvas_obj, text, font, font_size, x, rl_y, max_width, align):
+        """
+        يرسم النص بحجم خط ثابت (font_size).
+        - لو النص يسع في سطر واحد → يرسمه مركزاً.
+        - لو طويل → يكسره عند آخر مسافة قبل تجاوز العرض (سطر أول + سطر ثاني).
+        - لو السطر الثاني أيضاً طويل → يقطعه (لا يوجد سطر ثالث).
+        المسافة العمودية بين السطرين = font_size * 1.2
+        """
+        line_height = font_size * 1.2
+
+        try:
+            total_w = pdfmetrics.stringWidth(text, font, font_size)
+        except Exception:
+            total_w = max_width + 1
+
+        if total_w <= max_width:
+            # سطر واحد يكفي
+            canvas_obj.setFont(font, font_size)
+            if align == 'left':
+                canvas_obj.drawString(x, rl_y, text)
+            elif align == 'right':
+                canvas_obj.drawRightString(x, rl_y, text)
+            else:
+                canvas_obj.drawCentredString(x, rl_y, text)
+            return
+
+        # نكسر عند المسافات
+        words = text.split(' ')
+        line1 = ''
+        for i, word in enumerate(words):
+            test = (line1 + ' ' + word).strip()
+            try:
+                w = pdfmetrics.stringWidth(test, font, font_size)
+            except Exception:
+                w = max_width + 1
+            if w <= max_width:
+                line1 = test
+            else:
+                # الكلمات المتبقية تكوّن السطر الثاني
+                line2_words = words[i:]
+                line2 = ' '.join(line2_words)
+                # قطع السطر الثاني إن تجاوز العرض
+                if line2:
+                    try:
+                        w2 = pdfmetrics.stringWidth(line2, font, font_size)
+                    except Exception:
+                        w2 = max_width + 1
+                    if w2 > max_width:
+                        # اقتطاع من نهاية السطر الثاني
+                        trimmed = ''
+                        for ch in line2:
+                            try:
+                                tw = pdfmetrics.stringWidth(trimmed + ch, font, font_size)
+                            except Exception:
+                                tw = max_width + 1
+                            if tw <= max_width:
+                                trimmed += ch
+                            else:
+                                break
+                        line2 = trimmed.rstrip()
+
+                # رسم السطرين — السطر الأول أعلى، الثاني أسفل بمسافة line_height
+                y1 = rl_y + line_height * 0.5
+                y2 = rl_y - line_height * 0.5
+                canvas_obj.setFont(font, font_size)
+                for line, y in [(line1, y1), (line2, y2)]:
+                    if not line:
+                        continue
+                    if align == 'left':
+                        canvas_obj.drawString(x, y, line)
+                    elif align == 'right':
+                        canvas_obj.drawRightString(x, y, line)
+                    else:
+                        canvas_obj.drawCentredString(x, y, line)
+                return
+
+        # لو كل الكلمات ملائمة في سطر واحد
+        canvas_obj.setFont(font, font_size)
+        if align == 'left':
+            canvas_obj.drawString(x, rl_y, line1)
+        elif align == 'right':
+            canvas_obj.drawRightString(x, rl_y, line1)
+        else:
+            canvas_obj.drawCentredString(x, rl_y, line1)
+
+    for slot_id, slot in DRAW_SLOTS.items():
+        value = field_values.get(slot_id)
+        if not value:
+            continue
+        text_str = to_western_nums(str(value).strip())
+        if not text_str:
+            continue
+
+        x         = slot['x']    * x_scale
+        rl_y      = slot['rl_y'] * y_scale
+        font_size = slot['size']
+        rgb       = slot.get('color', (0.08, 0.08, 0.08))
+        align     = slot.get('align', 'center')
+        is_bold   = slot.get('bold', False)
+
+        c.setFillColorRGB(*rgb)
+
+        # ── leave_duration_ar: رسم مقطعي — عربي بـ Noto، أرقام/أقواس بـ Times ──
+        if slot.get('skip_arabic_processing'):
+            # النص: "N أيام ( h_start الى h_end )"
+            # نقسمه ونرسم كل مقطع بخطه ومن اليمين للشمال يدوياً
+            # نحسب العرض الكلي أولاً ثم نبدأ من x (مركز) - totalW/2
+            segments = []  # list of (text, font)
+            for token in text_str.split(' '):
+                if not token:
+                    continue
+                if any('\u0600' <= ch <= '\u06ff' for ch in token):
+                    # كلمة عربية — نشكّلها بـ NotoSansArabic
+                    if _BIDI_OK:
+                        try:
+                            shaped_tok = get_display(arabic_reshaper.reshape(token), base_dir='R')
+                        except Exception:
+                            shaped_tok = token
+                    else:
+                        shaped_tok = token
+                    segments.append((shaped_tok, FONT_AR_REG))
+                else:
+                    segments.append((token, FONT_REG))
+
+            # عكس الترتيب + قلب الأقواس لأن الخلية RTL
+            segments = [(')' if t=='(' else '(' if t==')' else t, f)
+                        for t, f in reversed(segments)]
+
+            # حساب العرض الكلي
+            space_w = c.stringWidth(' ', FONT_REG, font_size)
+            total_w = sum(c.stringWidth(t, f, font_size) for t, f in segments)
+            total_w += space_w * (len(segments) - 1)
+
+            cur_x = x - total_w / 2
+            c.setFont(FONT_REG, font_size)
+            for i, (tok, fnt) in enumerate(segments):
+                c.setFont(fnt, font_size)
+                c.drawString(cur_x, rl_y, tok)
+                cur_x += c.stringWidth(tok, fnt, font_size)
+                if i < len(segments) - 1:
+                    cur_x += space_w
+            continue
+
+        # ── reshape_only: نوصّل الحروف العربية ونطبّق BiDi بصراحة ──────
+        # ❌ كان يُفترض أن مشاهد PDF يطبّق BiDi بنفسه — لكن هذا غير صحيح؛
+        #    مشاهدات PDF ترسم الحروف بالترتيب الذي وضعه ReportLab بالضبط.
+        # ✅ الحل: reshape لتوصيل الحروف + get_display(base_dir='R') لتحويل
+        #    الترتيب المنطقي إلى الترتيب البصري RTL، فتظهر الأقواس والأرقام
+        #    في أماكنها الصحيحة حول التواريخ الهجرية.
+        if slot.get('reshape_only'):
+            # font_override='times' → يستخدم TimesNewRoman بدل NotoSansArabic
+            if slot.get('font_override') == 'times':
+                font = FONT_BOLD if is_bold else FONT_REG
+            else:
+                font = FONT_AR_BOLD if is_bold else FONT_AR_REG
+            if _BIDI_OK:
+                try:
+                    if slot.get('font_override') == 'times':
+                        # النص جاهز بصرياً من to_hijri_duration — يُرسم مباشرة
+                        shaped = text_str
+                    else:
+                        reshaped = arabic_reshaper.reshape(text_str)
+                        shaped = get_display(reshaped, base_dir='R')
+                except Exception:
+                    shaped = text_str
+            else:
+                shaped = text_str
+            max_w = MAX_WIDTHS.get(slot_id, 0) * x_scale
+            if max_w > 0:
+                _draw_fixed_two_lines(c, shaped, font, font_size, x, rl_y, max_w, align)
+            else:
+                c.setFont(font, font_size)
+                if align == 'left':
+                    c.drawString(x, rl_y, shaped)
+                elif align == 'right':
+                    c.drawRightString(x, rl_y, shaped)
+                else:
+                    c.drawCentredString(x, rl_y, shaped)
+            continue
+
+        if _has_arabic(text_str):
+            # ── نص عربي ─────────────────────────────────────
+            font = FONT_AR_BOLD if is_bold else FONT_AR_REG
+            shaped = shape_arabic(text_str)
+            max_w = MAX_WIDTHS.get(slot_id, 0) * x_scale
+            if max_w > 0:
+                _draw_fixed_two_lines(c, shaped, font, font_size, x, rl_y, max_w, align)
+            else:
+                c.setFont(font, font_size)
+                if align == 'left':
+                    c.drawString(x, rl_y, shaped)
+                elif align == 'right':
+                    c.drawRightString(x, rl_y, shaped)
+                else:
+                    c.drawCentredString(x, rl_y, shaped)
+        else:
+            # ── نص إنجليزي ──────────────────────────────────
+            if slot.get('font_override') == 'open_sans' and _open_sans_ok:
+                font = 'OpenSans-Bold' if is_bold else 'OpenSans'
+                if _has_arabic(text_str):
+                    text_str = shape_arabic(text_str)
+            else:
+                font = FONT_BOLD if is_bold else FONT_REG
+            max_w = MAX_WIDTHS.get(slot_id, 0) * x_scale
+            if max_w > 0:
+                _draw_fixed_two_lines(c, text_str, font, font_size, x, rl_y, max_w, align)
+            else:
+                c.setFont(font, font_size)
+                if align == 'left':
+                    c.drawString(x, rl_y, text_str)
+                elif align == 'right':
+                    c.drawRightString(x, rl_y, text_str)
+                else:
+                    c.drawCentredString(x, rl_y, text_str)
+
+    # ─── شعار المستشفى — نفس حجم الباركود تماماً ──────────────
+    if logo_path and os.path.exists(logo_path):
+        try:
+            lx = LOGO_SLOT['x']      * x_scale
+            ly = LOGO_SLOT['rl_y']   * y_scale
+            lw = LOGO_SLOT['width']  * x_scale   # نفس منطق التحجيم كـ QR_SLOT
+            lh = LOGO_SLOT['height'] * y_scale   # نفس منطق التحجيم كـ QR_SLOT
+            c.drawImage(
+                logo_path,
+                lx, ly,
+                width=lw,
+                height=lh,
+                preserveAspectRatio=True,
+                mask='auto',
+            )
+        except Exception:
+            pass
+
+    # ─── رسم باركود QR في موضعه الأصلي ─────────────────────────────
+    # الرابط من website_url الممرَّر (رابط الأدمن) — لا رابط ثابت
+    SEHA_URL = str(website_url or "https://sehaseinquiresslendquiry.com").strip()
+    # ضمان أن الرابط يبدأ بـ https:// دائماً
+    if SEHA_URL and not SEHA_URL.startswith(("https://", "http://")):
+        SEHA_URL = "https://" + SEHA_URL
+    qx = QR_SLOT['x']      * x_scale
+    qy = QR_SLOT['rl_y']   * y_scale
+    qw = QR_SLOT['width']  * x_scale
+    qh = QR_SLOT['height'] * y_scale
+
+    # توليد صورة QR ورسمها مباشرةً على الـ canvas
+    try:
+        import qrcode
+        from reportlab.lib.utils import ImageReader
+        _qr = qrcode.QRCode(version=2, box_size=6, border=1,
+                            error_correction=qrcode.constants.ERROR_CORRECT_M)
+        _qr.add_data(SEHA_URL)
+        _qr.make(fit=True)
+        _qr_img = _qr.make_image(fill_color="black", back_color="white")
+        _buf = io.BytesIO()
+        _qr_img.save(_buf, 'PNG')
+        _buf.seek(0)
+        c.drawImage(ImageReader(_buf), qx, qy, width=qw, height=qh, mask='auto')
+    except Exception:
+        # fallback: مستطيل أبيض إن فشل توليد QR
+        c.setFillColorRGB(1, 1, 1)
+        c.setStrokeColorRGB(1, 1, 1)
+        c.setLineWidth(0)
+        c.rect(qx, qy, qw, qh, stroke=0, fill=1)
+
+    # ─── رسم نص الرابط الشكلي فوق الخط الأزرق + annotation برابط الأدمن ───
+    # القالب الجديد لا يحتوي رابطاً نصياً — فقط خط أزرق
+    # نرسم النص شكلياً فوق الخط، والـ annotation يحمل رابط الأدمن
+
+    # إحداثيات منطقة الرابط — مستخرجة بدقة من templates_NEE.pdf
+    # الخط الأزرق: x0=144.6, x1=308.4, cx=226.5, rl_y=275.3
+    # حجم الخط 11.8pt → عرض النص 163.2pt ≈ عرض الخط 163.7pt
+    _link_x0  = 144.60 * x_scale
+    _link_x1  = 308.40 * x_scale
+    _link_y0  = 273.30 * y_scale   # أسفل منطقة النقر (rl_y - 2)
+    _link_y1  = 289.10 * y_scale   # أعلى منطقة النقر (rl_y + font_size + 2)
+
+    # رسم نص الرابط الشكلي — 11.8pt يطابق عرض الخط الأزرق بالضبط
+    _display_url = "www.seha.sa/#/inquiries/slenquiry"
+    _font_size = 11.8 * min(x_scale, y_scale)
+    try:
+        c.setFont(FONT_REG, _font_size)
+    except Exception:
+        c.setFont("Times-Roman", _font_size)
+    c.setFillColorRGB(0.0, 0.0, 1.0)   # أزرق نقي — مطابق للخط الأزرق في القالب
+    # مركز الخط الأزرق: x=226.5 — baseline فوق الخط بـ 2pt
+    _text_x = 226.50 * x_scale
+    _text_y = 277.30 * y_scale
+    c.drawCentredString(_text_x, _text_y, _display_url)
+
+    # annotation غير مرئي فوق نفس المنطقة — عند النقر/النسخ يفتح رابط الأدمن
+    c.linkURL(SEHA_URL, (_link_x0, _link_y0, _link_x1, _link_y1), relative=0)
+
+    c.save()
+
+
+# ══════════════════════════════════════════════════════════════
+# الدالة الرئيسية
+# ══════════════════════════════════════════════════════════════
+
+def generate_excuse_pdf(order_data, hospital, doctor, specialty, issue_time,
+                        output_path=None, logo_path=None, gsl_code=None,
+                        license_number=None,
+                        hospital_type=None,
+                        website_url="https://sehaseinquiresslendquiry.com",
+                        template_path=None,
+                        same_day_discharge=False,
+                        hospital_name_en=None):
+    """
+    ينشئ PDF إجازة مرضية بإحداثيات مطابقة لملف صحة المرجعي.
+
+    المعاملات:
+        order_data      — dict: بيانات الطلب
+        hospital        — اسم المستشفى (عربي)
+        doctor          — اسم الطبيب   (عربي)
+        specialty       — التخصص       (عربي)
+        issue_time      — وقت الإصدار  مثل "4:14 PM"
+        logo_path       — مسار شعار المستشفى (PNG/JPG)
+        gsl_code        — رمز الإجازة (اختياري، يُولَّد تلقائياً)
+        license_number  — رقم الترخيص 16 رقماً (اختياري، يُولَّد تلقائياً للخاص)
+        hospital_type   — نوع المستشفى: 'خاص' | 'حكومي' | 'مجمعات' (اختياري)
+        template_path   — مسار قالب PDF (إلزامي)
+    """
+
+    if not template_path or not os.path.exists(template_path):
+        raise FileNotFoundError(
+            "❌ لا يوجد قالب PDF!\n"
+            "يجب رفع قالب من لوحة التحكم:\n"
+            "⚙️ نظام البوت ← 📄 قوالب PDF ← ➕ إضافة قالب PDF جديد"
+        )
+
+    if not output_path:
+        output_path = os.path.join(TEMP_DIR, f"excuse_{uuid.uuid4().hex}.pdf")
+
+    page_w, page_h = _get_page_size(template_path)
+
+    # ── تحضير البيانات ────────────────────────────────────────
+    days      = safe_int(order_data.get("days_count", 1))
+    exit_raw  = _clean(order_data.get("exit_date", "") or "")
+    start, end, discharge = calc_dates(
+        order_data.get("excuse_date", ""), days, exit_raw or None
+    )
+
+
+    # ── تاريخ الخروج حسب خيار same_day_discharge ──────────────
+    # calc_dates تُرجع discharge = start دائماً (exit_date فارغ)
+    # نفس اليوم  → discharge = start
+    # حسب الأيام → discharge = end
+    if same_day_discharge:
+        discharge = start   # نفس يوم الدخول
+    else:
+        discharge = end     # نهاية فترة الإجازة
+    leave_id    = gsl_code or gen_leave_id(order_data)
+    full_name   = str(order_data.get("full_name",   "") or "")
+    id_number   = str(order_data.get("id_number",   "") or "")
+    nationality = str(order_data.get("nationality", "") or "")
+    workplace   = str(order_data.get("workplace",   "") or "")
+
+    # تاريخ الإصدار — افتراضياً = تاريخ الخروج، وإذا غيّره المستخدم يُطبَّق اختياره
+    _iss = order_data.get("issue_date_input", "")
+    if _iss:
+        issue_dt  = datetime.now()  # قيمة مؤقتة في حال فشل الـ parse
+        for _fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%Y-%m-%d"]:
+            try:
+                issue_dt  = datetime.strptime(_iss.strip(), _fmt)
+                break
+            except Exception:
+                pass
+    else:
+        # الافتراضي: تاريخ الخروج
+        for _fmt in ["%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"]:
+            try:
+                issue_dt = datetime.strptime(discharge.strip(), _fmt)
+                break
+            except Exception:
+                issue_dt = datetime.now()
+    today_str = issue_dt.strftime("%d-%m-%Y")
+
+    # ── مدة الإجازة (إنجليزي ← ميلادي) ────────────────────────
+    dwe         = "day" if days == 1 else "days"
+    duration_en = f"{days} {dwe} ( {start} to {end} )"   # ميلادي — مسافة داخل الأقواس مطابق للمرجع
+
+    # ── التواريخ الهجرية ────────────────────────────────────────
+    hijri_start     = to_hijri(start)
+    hijri_end       = to_hijri(end)
+    hijri_discharge = to_hijri(discharge)
+    # نمرر التواريخ الهجرية المحسوبة بدل إعادة حسابها داخل to_hijri_duration
+    duration_hijri  = to_hijri_duration(days, hijri_start, hijri_end)
+
+    # ── الترجمة ─────────────────────────────────────────────────
+    # الأولوية: الاسم المُدخَل يدوياً من المستخدم → وإلا ترجمة تلقائية
+    _name_en_manual = str(order_data.get("full_name_en",     "") or "").strip()
+    _doc_en_manual  = str(order_data.get("doctor_name_en",   "") or "").strip()
+    name_en   = _name_en_manual or _to_en(full_name)
+    nat_en_   = nat_en(nationality)
+    doc_en    = _doc_en_manual  or _to_en(doctor or "")
+    spec_en   = _to_en(specialty or "")
+
+    # الأسماء الإنجليزية بالحروف الكبيرة (ALL CAPS) — مطابق للأصلي
+    name_en_upper = (name_en or full_name).upper()
+    doc_en_upper  = (doc_en  or (doctor or "")).upper()
+
+    # اسم المستشفى إنجليزي — الأولوية للاسم المُمرَّر من DB، وإلا نترجم
+    hosp_en   = hospital_name_en if hospital_name_en and hospital_name_en.strip() else _to_en(hospital or "")
+
+    # رقم الترخيص (16 رقم) — للمستشفيات الخاصة فقط
+    # الأولوية: hospital_type المُمرَّر مباشرةً > فحص is_private_hospital
+    if hospital_type is not None:
+        _is_private = (str(hospital_type).strip() == "خاص")
+    else:
+        _is_private = is_private_hospital(hospital)
+    # رقم الترخيص — يُعرض فقط إذا مُرِّر صراحةً (الزر مُفعَّل من bot.py)
+    lic_num = license_number if license_number else None
+
+    # الوقت والتاريخ
+    _time_str = str(issue_time or "").strip()
+    _time_str = _time_str if (_time_str and "اختياري" not in _time_str) else issue_dt.strftime("%I:%M %p")
+
+    # صيغة التاريخ: Thursday, 26 March 2026
+    weekday_date = format_weekday_date(issue_dt)
+
+    # ── ربط القيم بالـ slots ───────────────────────────────────
+    field_values = {
+        # صفوف واسعة
+        'leave_id':             leave_id,
+        'issue_date':           discharge,      # تاريخ الإصدار = تاريخ الخروج (آخر يوم للإجازة)
+        'national_id':          id_number,
+
+        # مدة الإجازة — أبيض اللون
+        # العمود الإنجليزي (يسار) → ميلادي | العمود العربي (يمين) → هجري مع أقواس
+        'leave_duration_en':    duration_en,
+        'leave_duration_ar':    duration_hijri,
+
+        # عمود إنجليزي — التواريخ بالميلادي، الأسماء بـ ALL CAPS
+        'admission_date_en':    start,
+        'discharge_date_en':    discharge,
+        'name_en':              name_en_upper,             # ALL CAPS مطابق للأصلي
+        'nationality_en':       nat_en_,
+        'practitioner_name_en': doc_en_upper,              # ALL CAPS مطابق للأصلي
+        'position_en':          spec_en or (specialty or ""),
+
+        # عمود عربي — التواريخ بالهجري
+        'admission_date_ar':    hijri_start,
+        'discharge_date_ar':    hijri_discharge,
+        'name_ar':              full_name,
+        'nationality_ar':       normalize_nat_ar(nationality),
+        'employer_ar':          workplace,
+        'practitioner_name_ar': doctor    or "",
+        'position_ar':          specialty or "",
+
+        # قسم المستشفى
+        'hospital_name_ar':     hospital  or "",
+        'hospital_name_en':     hosp_en if hosp_en and not any('\u0600' <= c <= '\u06FF' for c in hosp_en) else "",
+        # رقم الترخيص — خاص فقط (None للحكومي فيخفي الحقل)
+        # الصيغة: رقم الترخيص: XXXXXXXXXXXXXXXX  (16 رقم غربي)
+        'license_number': f'رقم الترخيص: {lic_num}' if lic_num else None,
+
+        # الوقت والتاريخ
+        'issue_time':           _time_str,
+        'issue_weekday_date':   weekday_date,
+    }
+
+    # ── توليد الـ overlay والدمج ──────────────────────────────
+    uid         = uuid.uuid4().hex[:8]
+    overlay_tmp = os.path.join(TEMP_DIR, f"overlay_{uid}.pdf")
+
+    try:
+        _create_overlay(page_w, page_h, field_values, None, logo_path, overlay_tmp,
+                        website_url=website_url)
+
+        template_reader = PdfReader(template_path)
+        overlay_reader  = PdfReader(overlay_tmp)
+
+        writer    = PdfWriter()
+        base_page = template_reader.pages[0]
+
+        if '/Annots' in base_page:
+            del base_page['/Annots']
+
+        base_page.merge_page(overlay_reader.pages[0])
+        writer.add_page(base_page)
+
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+    finally:
+        try:
+            if os.path.exists(overlay_tmp):
+                os.remove(overlay_tmp)
+        except Exception:
+            pass
+
+    return output_path
