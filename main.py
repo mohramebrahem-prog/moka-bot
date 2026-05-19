@@ -1078,7 +1078,7 @@ def download_report_pdf(rnum: str, user: dict = Depends(get_current_user)):
                    h.name_ar AS hospital_name_ar, h.name_en AS hospital_name_en,
                    h.city AS hospital_city, h.type AS hospital_type,
                    h.logo_b64 AS hospital_logo,
-                   h.license_no AS hospital_license,
+                   '' AS hospital_license,
                    d.name_ar AS doctor_name_ar, d.name_en AS doctor_name_en,
                    d.specialty AS doctor_specialty, d.license_no AS doctor_license
             FROM reports r
